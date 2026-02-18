@@ -1,6 +1,3 @@
-<<<<<<< HEAD
-# Bachelor-Thesis
-=======
 # Calibration Monorepo
 
 This repository is organized as a monorepo for three parallel tracks:
@@ -45,4 +42,3 @@ From repo root, editable install is managed via workspace membership. You can al
 cd packages/splinecal
 uv run pytest
 ```
->>>>>>> 29bf093 (LOLOL)
