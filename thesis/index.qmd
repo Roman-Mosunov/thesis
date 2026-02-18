@@ -1,0 +1,19 @@
+---
+title: "Spline Calibration"
+author: "Your Name"
+format:
+  html: default
+  pdf: default
+---
+
+# Introduction
+
+This thesis documents spline-based probability calibration.
+
+# Methods
+
+Describe model formulation, training objective, and evaluation metrics.
+
+# Experiments
+
+Use outputs from `analysis/` and package APIs from `packages/splinecal`.

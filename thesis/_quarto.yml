@@ -1,0 +1,15 @@
+project:
+  type: manuscript
+  output-dir: _output
+
+manuscript:
+  article: index.qmd
+
+format:
+  html:
+    toc: true
+  pdf:
+    documentclass: scrreprt
+    toc: true
+
+bibliography: references.bib

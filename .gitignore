@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual envs / tools
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Quarto
+.quarto/
+*_files/
+
+# OS / editors
+.DS_Store
+.vscode/
+.idea/
+
+# Data artifacts
+analysis/outputs/
+data/processed/
