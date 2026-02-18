@@ -1,7 +1,7 @@
 import numpy as np
 from sklearn.base import clone
 
-from splinecal.calibrators import SplineBinaryCalibrator
+from splinecal.calibrators import HaarMonotoneRidgeCalibrator, SplineBinaryCalibrator
 
 
 def test_clone_round_trip() -> None:
@@ -21,3 +21,9 @@ def test_fit_with_2d_inputs() -> None:
 
     assert pred.shape == (120,)
     assert set(np.unique(pred)).issubset({0, 1})
+
+
+def test_haar_calibrator_clone_round_trip() -> None:
+    est = HaarMonotoneRidgeCalibrator(j_max=5, lam=1e-3, use_haar_norm=False, clip_probs=False)
+    cloned = clone(est)
+    assert cloned.get_params() == est.get_params()

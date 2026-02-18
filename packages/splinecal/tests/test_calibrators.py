@@ -1,6 +1,6 @@
 import numpy as np
 
-from splinecal.calibrators import SplineBinaryCalibrator
+from splinecal.calibrators import HaarMonotoneRidgeCalibrator, SplineBinaryCalibrator
 
 
 def test_calibrator_fit_predict_proba_shape() -> None:
@@ -27,3 +27,30 @@ def test_calibrator_rejects_non_binary_target() -> None:
         assert False, "Expected ValueError"
     except ValueError as exc:
         assert "binary" in str(exc).lower()
+
+
+def test_haar_monotone_calibrator_predict_proba_is_monotone() -> None:
+    rng = np.random.default_rng(11)
+    scores = np.sort(rng.uniform(0.0, 1.0, size=400))
+    y = (rng.uniform(size=400) < scores).astype(int)
+
+    cal = HaarMonotoneRidgeCalibrator(j_max=5, lam=1e-2)
+    cal.fit(scores, y)
+
+    grid = np.linspace(0.0, 1.0, 1001)
+    proba = cal.predict_proba(grid)[:, 1]
+
+    assert proba.shape == (1001,)
+    assert np.all(np.diff(proba) >= -1e-8)
+
+
+def test_haar_monotone_calibrator_supports_non_numeric_labels() -> None:
+    rng = np.random.default_rng(21)
+    scores = rng.uniform(0.0, 1.0, size=300)
+    y = np.where(rng.uniform(size=300) < scores, "yes", "no")
+
+    cal = HaarMonotoneRidgeCalibrator(j_max=4, lam=1e-2)
+    cal.fit(scores, y)
+    pred = cal.predict(scores)
+
+    assert set(np.unique(pred)) <= {"no", "yes"}

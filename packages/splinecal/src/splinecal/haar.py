@@ -68,6 +68,8 @@ def design_matrix(
 ) -> NDArray[np.float64]:
     """Build B[i, ell] = psi_tilde(scores[i], j, k)."""
     scores_arr = np.asarray(scores, dtype=float).ravel()
+    if np.any(~np.isfinite(scores_arr)):
+        raise ValueError("scores must be finite.")
     b_mat = np.empty((scores_arr.size, len(basis_idx)), dtype=float)
 
     for ell, (j, k) in enumerate(basis_idx):
@@ -108,6 +110,10 @@ def fit_monotone_ridge(
 
     if scores_arr.shape != y_arr.shape:
         raise ValueError("scores and y must have the same shape.")
+    if np.any(~np.isfinite(scores_arr)) or np.any(~np.isfinite(y_arr)):
+        raise ValueError("scores and y must be finite.")
+    if np.any((scores_arr < 0.0) | (scores_arr > 1.0)):
+        raise ValueError("scores must lie in [0, 1].")
 
     basis_idx = build_basis(j_max)
     b_mat = design_matrix(scores_arr, basis_idx, use_haar_norm=use_haar_norm)
