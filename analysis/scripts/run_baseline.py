@@ -7,7 +7,6 @@ Run from repo root:
 from __future__ import annotations
 
 import numpy as np
-
 from splinecal import SplineBinaryCalibrator, expected_calibration_error
 
 

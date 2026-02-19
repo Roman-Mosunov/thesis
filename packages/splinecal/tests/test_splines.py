@@ -1,5 +1,4 @@
 import numpy as np
-
 from splinecal.splines import as_probability_vector
 
 

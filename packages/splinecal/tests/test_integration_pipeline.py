@@ -1,5 +1,4 @@
 import numpy as np
-
 from splinecal.metrics import expected_calibration_error
 
 

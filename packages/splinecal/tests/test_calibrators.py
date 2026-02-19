@@ -1,5 +1,5 @@
 import numpy as np
-
+import pytest
 from splinecal.calibrators import HaarMonotoneRidgeCalibrator, SplineBinaryCalibrator
 
 
@@ -22,11 +22,8 @@ def test_calibrator_rejects_non_binary_target() -> None:
 
     cal = SplineBinaryCalibrator()
 
-    try:
+    with pytest.raises(ValueError, match="binary"):
         cal.fit(x, y)
-        assert False, "Expected ValueError"
-    except ValueError as exc:
-        assert "binary" in str(exc).lower()
 
 
 def test_haar_monotone_calibrator_predict_proba_is_monotone() -> None:

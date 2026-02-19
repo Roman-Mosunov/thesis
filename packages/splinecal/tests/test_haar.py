@@ -1,5 +1,5 @@
 import numpy as np
-
+import pytest
 from splinecal.haar import (
     build_basis,
     check_monotone,
@@ -75,8 +75,5 @@ def test_fit_monotone_ridge_rejects_out_of_range_scores() -> None:
     scores = np.array([-0.1, 0.2, 0.6])
     y = np.array([0.0, 1.0, 1.0])
 
-    try:
+    with pytest.raises(ValueError, match=r"\[0, 1\]"):
         fit_monotone_ridge(scores, y, j_max=2, lam=1e-2)
-        assert False, "Expected ValueError"
-    except ValueError as exc:
-        assert "[0, 1]" in str(exc)

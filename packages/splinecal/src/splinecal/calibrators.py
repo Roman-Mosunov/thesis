@@ -37,7 +37,7 @@ class SplineBinaryCalibrator(ClassifierMixin, BaseEstimator):
         self,
         x: NDArray[np.float64] | NDArray[np.int64],
         y: NDArray[np.float64] | NDArray[np.int64],
-    ) -> "SplineBinaryCalibrator":
+    ) -> SplineBinaryCalibrator:
         x_checked = check_array(x, ensure_2d=False)
         y_arr = np.asarray(y)
 
@@ -103,7 +103,7 @@ class HaarMonotoneRidgeCalibrator(ClassifierMixin, BaseEstimator):
         self,
         x: NDArray[np.float64] | NDArray[np.int64],
         y: NDArray[np.float64] | NDArray[np.int64],
-    ) -> "HaarMonotoneRidgeCalibrator":
+    ) -> HaarMonotoneRidgeCalibrator:
         x_checked = check_array(x, ensure_2d=False)
         y_arr = np.asarray(y)
 
