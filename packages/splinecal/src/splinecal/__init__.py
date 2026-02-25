@@ -8,12 +8,13 @@ from .haar import (
     predict_monotone_ridge,
     psi_tilde,
 )
-from .metrics import expected_calibration_error
+from .metrics import brier_score, expected_calibration_error
 
 __all__ = [
     "HaarMonotoneRidgeCalibrator",
     "SplineBinaryCalibrator",
     "build_basis",
+    "brier_score",
     "check_monotone",
     "design_matrix",
     "expected_calibration_error",

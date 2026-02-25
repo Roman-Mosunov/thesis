@@ -7,7 +7,7 @@ Run from repo root:
 from __future__ import annotations
 
 import numpy as np
-from splinecal import SplineBinaryCalibrator, expected_calibration_error
+from splinecal import SplineBinaryCalibrator, brier_score, expected_calibration_error
 
 
 def main() -> None:
@@ -20,7 +20,9 @@ def main() -> None:
 
     calibrated = calibrator.predict_proba(raw)[:, 1]
     ece = expected_calibration_error(y, calibrated)
+    brier = brier_score(y, calibrated)
     print(f"ECE: {ece:.4f}")
+    print(f"Brier: {brier:.4f}")
 
 
 if __name__ == "__main__":
