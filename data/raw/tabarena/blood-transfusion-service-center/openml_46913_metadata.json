@@ -1,0 +1,13 @@
+{
+  "dataset_name": "blood-transfusion-service-center",
+  "dataset_id": 46913,
+  "target_column": "DonatedBloodInMarch2007",
+  "n_rows": 748,
+  "n_features": 4,
+  "n_classes": 2,
+  "class_counts_raw": {
+    "No": 570,
+    "Yes": 178
+  },
+  "persisted_at_utc": "2026-02-25T20:21:09.617306+00:00"
+}

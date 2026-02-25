@@ -9,6 +9,7 @@ from .haar import (
     psi_tilde,
 )
 from .metrics import brier_score, expected_calibration_error
+from .plotting import plot_reliability_diagram, reliability_points, save_reliability_diagram
 
 __all__ = [
     "HaarMonotoneRidgeCalibrator",
@@ -19,7 +20,10 @@ __all__ = [
     "design_matrix",
     "expected_calibration_error",
     "fit_monotone_ridge",
+    "plot_reliability_diagram",
     "predict_monotone_ridge",
     "psi_tilde",
+    "reliability_points",
+    "save_reliability_diagram",
     "__version__",
 ]
