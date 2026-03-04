@@ -10,7 +10,8 @@ Outputs are stored under `analysis/outputs/tabarena/...` and include:
 - result tables for each stage,
 - saved models,
 - prediction snapshots,
-- reliability plots,
+- reliability plots (per-estimator and comparison),
+- estimator mapping comparison plots,
 - reproducibility metadata (versions, params, ids, git hash).
 """
 
@@ -27,6 +28,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from joblib import dump
@@ -45,8 +47,10 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 from splinecal import (
     HaarMonotoneRidgeCalibrator,
+    SplineBinaryCalibrator,
     brier_score,
     expected_calibration_error,
+    reliability_points,
     save_reliability_diagram,
 )
 
@@ -260,6 +264,7 @@ def _metrics_row(
     ece_bins: int,
     j_max: int | None = None,
     lam: float | None = None,
+    spline_n_knots: int | None = None,
     subset_fraction: float | None = None,
 ) -> dict[str, Any]:
     probs = np.asarray(y_prob, dtype=float).ravel()
@@ -269,6 +274,7 @@ def _metrics_row(
         "subset_fraction": subset_fraction,
         "j_max": j_max,
         "lam": lam,
+        "spline_n_knots": spline_n_knots,
         "n_samples": int(y_true.shape[0]),
         "positive_rate": float(np.mean(y_true)),
         "brier_score": brier_score(y_true, probs),
@@ -286,6 +292,28 @@ def _fit_haar(
     lam: float,
 ) -> NDArrayFloat:
     calibrator = HaarMonotoneRidgeCalibrator(j_max=j_max, lam=lam)
+    calibrator.fit(scores_cal, y_cal)
+    return calibrator.predict_proba(scores_eval)[:, 1]
+
+
+def _fit_spline(
+    scores_cal: NDArrayFloat,
+    y_cal: NDArrayInt,
+    scores_eval: NDArrayFloat,
+    *,
+    n_knots: int,
+    degree: int,
+    include_bias: bool,
+    c: float,
+    max_iter: int,
+) -> NDArrayFloat:
+    calibrator = SplineBinaryCalibrator(
+        n_knots=n_knots,
+        degree=degree,
+        include_bias=include_bias,
+        c=c,
+        max_iter=max_iter,
+    )
     calibrator.fit(scores_cal, y_cal)
     return calibrator.predict_proba(scores_eval)[:, 1]
 
@@ -320,6 +348,11 @@ def _run_subset_fixed_stage(
     y_test: NDArrayInt,
     fixed_j_max: int,
     fixed_lam: float,
+    spline_n_knots: int,
+    spline_degree: int,
+    spline_include_bias: bool,
+    spline_c: float,
+    spline_max_iter: int,
     ece_bins: int,
     random_state: int,
 ) -> pd.DataFrame:
@@ -341,6 +374,28 @@ def _run_subset_fixed_stage(
                 y_true=y_test_sub,
                 y_prob=p_test_sub,
                 ece_bins=ece_bins,
+                subset_fraction=frac,
+            )
+        )
+
+        p_spline = _fit_spline(
+            p_cal_sub,
+            y_cal_sub,
+            p_test_sub,
+            n_knots=spline_n_knots,
+            degree=spline_degree,
+            include_bias=spline_include_bias,
+            c=spline_c,
+            max_iter=spline_max_iter,
+        )
+        rows.append(
+            _metrics_row(
+                method="spline_fixed",
+                phase="subset_fixed",
+                y_true=y_test_sub,
+                y_prob=p_spline,
+                ece_bins=ece_bins,
+                spline_n_knots=spline_n_knots,
                 subset_fraction=frac,
             )
         )
@@ -461,6 +516,7 @@ def _save_predictions_table(
     output_path: Path,
     y_true: NDArrayInt,
     prob_base: NDArrayFloat,
+    prob_spline: NDArrayFloat,
     prob_fixed: NDArrayFloat,
     prob_gridsearch_best: NDArrayFloat,
 ) -> None:
@@ -468,11 +524,173 @@ def _save_predictions_table(
         {
             "y_true": y_true.astype(int),
             "prob_base": prob_base,
+            "prob_spline": prob_spline,
             "prob_fixed": prob_fixed,
             "prob_gridsearch_best": prob_gridsearch_best,
         }
     )
     table.to_csv(output_path, index=False)
+
+
+def _save_reliability_comparison_plot(
+    *,
+    y_true: NDArrayInt,
+    output_path: Path,
+    probs_by_method: dict[str, NDArrayFloat],
+    n_bins: int,
+    ece_bins: int,
+) -> Path:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.plot([0.0, 1.0], [0.0, 1.0], linestyle="--", color="#666666", linewidth=1.2, label="Perfect")
+
+    style_map = [
+        ("base_model", "Base", "#4C72B0"),
+        ("spline_fixed", "Spline", "#55A868"),
+        ("haar_fixed", "Haar fixed", "#C44E52"),
+        ("haar_gridsearch_best", "Haar best", "#8172B2"),
+    ]
+    for method, label, color in style_map:
+        if method not in probs_by_method:
+            continue
+        probs = np.asarray(probs_by_method[method], dtype=float)
+        _, points = reliability_points(y_true, probs, n_bins=n_bins)
+        conf = points[:, 0]
+        acc = points[:, 1]
+        valid = (~np.isnan(conf)) & (~np.isnan(acc))
+        ece = expected_calibration_error(y_true, probs, n_bins=ece_bins)
+        brier = brier_score(y_true, probs)
+        ax.plot(
+            conf[valid],
+            acc[valid],
+            marker="o",
+            linewidth=1.8,
+            color=color,
+            label=f"{label} (Brier={brier:.3f}, ECE={ece:.3f})",
+        )
+
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(0.0, 1.0)
+    ax.set_xlabel("Mean predicted probability")
+    ax.set_ylabel("Empirical positive rate")
+    ax.set_title("Reliability Comparison: All Estimators")
+    ax.grid(alpha=0.3)
+    ax.legend(loc="lower right", fontsize=9)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+    return output_path
+
+
+def _save_reliability_panel_plot(
+    *,
+    y_true: NDArrayInt,
+    output_path: Path,
+    probs_by_method: dict[str, NDArrayFloat],
+    n_bins: int,
+    ece_bins: int,
+) -> Path:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    fig, axes = plt.subplots(2, 2, figsize=(11, 9), sharex=True, sharey=True)
+    method_panels = [
+        ("base_model", "Base model", "#4C72B0"),
+        ("spline_fixed", "Spline", "#55A868"),
+        ("haar_fixed", "Haar fixed", "#C44E52"),
+        ("haar_gridsearch_best", "Haar best", "#8172B2"),
+    ]
+
+    for ax, (method, title, color) in zip(axes.ravel(), method_panels, strict=True):
+        if method not in probs_by_method:
+            ax.set_visible(False)
+            continue
+        probs = np.asarray(probs_by_method[method], dtype=float)
+        _, points = reliability_points(y_true, probs, n_bins=n_bins)
+        conf = points[:, 0]
+        acc = points[:, 1]
+        valid = (~np.isnan(conf)) & (~np.isnan(acc))
+        ece = expected_calibration_error(y_true, probs, n_bins=ece_bins)
+        brier = brier_score(y_true, probs)
+
+        ax.plot([0.0, 1.0], [0.0, 1.0], linestyle="--", color="#666666", linewidth=1.0)
+        ax.plot(conf[valid], acc[valid], marker="o", linewidth=1.8, color=color)
+        ax.set_title(f"{title} (Brier={brier:.3f}, ECE={ece:.3f})")
+        ax.set_xlim(0.0, 1.0)
+        ax.set_ylim(0.0, 1.0)
+        ax.grid(alpha=0.3)
+
+    fig.supxlabel("Mean predicted probability")
+    fig.supylabel("Empirical positive rate")
+    fig.suptitle("Reliability Comparison: Panel View", y=0.98)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+    return output_path
+
+
+def _save_estimator_comparison_plot(
+    *,
+    output_plot_path: Path,
+    output_table_path: Path,
+    spline_calibrator: SplineBinaryCalibrator,
+    haar_fixed_calibrator: HaarMonotoneRidgeCalibrator,
+    haar_best_calibrator: HaarMonotoneRidgeCalibrator,
+    grid_points: int,
+) -> tuple[Path, Path]:
+    if grid_points < 50:
+        raise ValueError("grid_points must be at least 50.")
+
+    output_plot_path.parent.mkdir(parents=True, exist_ok=True)
+    output_table_path.parent.mkdir(parents=True, exist_ok=True)
+
+    x_grid = np.linspace(0.0, 1.0, grid_points)
+    curves = {
+        "identity": x_grid,
+        "spline_fixed": spline_calibrator.predict_proba(x_grid)[:, 1],
+        "haar_fixed": haar_fixed_calibrator.predict_proba(x_grid)[:, 1],
+        "haar_gridsearch_best": haar_best_calibrator.predict_proba(x_grid)[:, 1],
+    }
+
+    pd.DataFrame(
+        {
+            "raw_score": x_grid,
+            "identity": curves["identity"],
+            "spline_fixed": curves["spline_fixed"],
+            "haar_fixed": curves["haar_fixed"],
+            "haar_gridsearch_best": curves["haar_gridsearch_best"],
+        }
+    ).to_csv(output_table_path, index=False)
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.plot(
+        x_grid,
+        curves["identity"],
+        linestyle="--",
+        color="#666666",
+        linewidth=1.2,
+        label="Identity",
+    )
+    ax.plot(x_grid, curves["spline_fixed"], color="#55A868", linewidth=2.0, label="Spline fixed")
+    ax.plot(x_grid, curves["haar_fixed"], color="#C44E52", linewidth=2.0, label="Haar fixed")
+    ax.plot(
+        x_grid,
+        curves["haar_gridsearch_best"],
+        color="#8172B2",
+        linewidth=2.0,
+        label="Haar gridsearch best",
+    )
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(0.0, 1.0)
+    ax.set_xlabel("Raw model score")
+    ax.set_ylabel("Calibrated probability")
+    ax.set_title("Estimator Mapping Comparison: All Calibrators")
+    ax.grid(alpha=0.3)
+    ax.legend(loc="lower right")
+    fig.tight_layout()
+    fig.savefig(output_plot_path, dpi=180)
+    plt.close(fig)
+    return output_plot_path, output_table_path
 
 
 def parse_args() -> argparse.Namespace:
@@ -484,6 +702,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--refresh-dataset", action="store_true")
 
     parser.add_argument("--subset-fracs", type=str, default="0.1,0.25,0.5")
+    parser.add_argument("--spline-n-knots", type=int, default=5)
+    parser.add_argument("--spline-degree", type=int, default=3)
+    parser.add_argument("--spline-c", type=float, default=1.0)
+    parser.add_argument("--spline-max-iter", type=int, default=500)
+    parser.add_argument("--spline-include-bias", action="store_true")
     parser.add_argument("--fixed-j-max", type=int, default=6)
     parser.add_argument("--fixed-lam", type=float, default=1e-2)
 
@@ -499,6 +722,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--ece-bins", type=int, default=15)
     parser.add_argument("--plot-bins", type=int, default=15)
+    parser.add_argument("--estimator-grid-points", type=int, default=1001)
     parser.add_argument("--random-state", type=int, default=42)
 
     parser.add_argument("--data-root", type=Path, default=Path("data/raw/tabarena"))
@@ -542,12 +766,27 @@ def main() -> None:
         y_cal=split.y_cal,
         scores_test=p_test,
         y_test=split.y_test,
+        spline_n_knots=args.spline_n_knots,
+        spline_degree=args.spline_degree,
+        spline_include_bias=args.spline_include_bias,
+        spline_c=args.spline_c,
+        spline_max_iter=args.spline_max_iter,
         fixed_j_max=args.fixed_j_max,
         fixed_lam=args.fixed_lam,
         ece_bins=args.ece_bins,
         random_state=args.random_state,
     )
     subset_df.to_csv(run_dir / "subset_fixed_results.csv", index=False)
+
+    spline_calibrator = SplineBinaryCalibrator(
+        n_knots=args.spline_n_knots,
+        degree=args.spline_degree,
+        include_bias=args.spline_include_bias,
+        c=args.spline_c,
+        max_iter=args.spline_max_iter,
+    )
+    spline_calibrator.fit(p_cal, split.y_cal)
+    p_spline_full = spline_calibrator.predict_proba(p_test)[:, 1]
 
     p_fixed_full = _fit_haar(
         p_cal,
@@ -591,6 +830,9 @@ def main() -> None:
     best_calibrator = grid.best_estimator_
     p_grid_best = best_calibrator.predict_proba(p_test.reshape(-1, 1))[:, 1]
 
+    fixed_calibrator = HaarMonotoneRidgeCalibrator(j_max=args.fixed_j_max, lam=args.fixed_lam)
+    fixed_calibrator.fit(p_cal, split.y_cal)
+
     final_rows = [
         _metrics_row(
             method="base_model",
@@ -598,6 +840,14 @@ def main() -> None:
             y_true=split.y_test,
             y_prob=p_test,
             ece_bins=args.ece_bins,
+        ),
+        _metrics_row(
+            method="spline_fixed",
+            phase="full_test",
+            y_true=split.y_test,
+            y_prob=p_spline_full,
+            ece_bins=args.ece_bins,
+            spline_n_knots=args.spline_n_knots,
         ),
         _metrics_row(
             method="haar_fixed",
@@ -625,6 +875,7 @@ def main() -> None:
         output_path=run_dir / "predictions_test.csv",
         y_true=split.y_test,
         prob_base=p_test,
+        prob_spline=p_spline_full,
         prob_fixed=p_fixed_full,
         prob_gridsearch_best=p_grid_best,
     )
@@ -636,6 +887,14 @@ def main() -> None:
         n_bins=args.plot_bins,
         ece_bins=args.ece_bins,
         title="Base model reliability",
+    )
+    save_reliability_diagram(
+        split.y_test,
+        p_spline_full,
+        output_path=plots_dir / "reliability_spline_fixed.png",
+        n_bins=args.plot_bins,
+        ece_bins=args.ece_bins,
+        title=f"Spline reliability (n_knots={args.spline_n_knots})",
     )
     save_reliability_diagram(
         split.y_test,
@@ -656,10 +915,41 @@ def main() -> None:
             f"lam={grid.best_params_['lam']:g})"
         ),
     )
+    _save_reliability_comparison_plot(
+        y_true=split.y_test,
+        output_path=plots_dir / "reliability_all_estimators_comparison.png",
+        probs_by_method={
+            "base_model": p_test,
+            "spline_fixed": p_spline_full,
+            "haar_fixed": p_fixed_full,
+            "haar_gridsearch_best": p_grid_best,
+        },
+        n_bins=args.plot_bins,
+        ece_bins=args.ece_bins,
+    )
+    _save_reliability_panel_plot(
+        y_true=split.y_test,
+        output_path=plots_dir / "reliability_all_estimators_panel.png",
+        probs_by_method={
+            "base_model": p_test,
+            "spline_fixed": p_spline_full,
+            "haar_fixed": p_fixed_full,
+            "haar_gridsearch_best": p_grid_best,
+        },
+        n_bins=args.plot_bins,
+        ece_bins=args.ece_bins,
+    )
+    _save_estimator_comparison_plot(
+        output_plot_path=plots_dir / "estimator_all_calibrators_comparison.png",
+        output_table_path=run_dir / "estimator_curves.csv",
+        spline_calibrator=spline_calibrator,
+        haar_fixed_calibrator=fixed_calibrator,
+        haar_best_calibrator=best_calibrator,
+        grid_points=args.estimator_grid_points,
+    )
 
     dump(base_model, models_dir / "base_model.joblib")
-    fixed_calibrator = HaarMonotoneRidgeCalibrator(j_max=args.fixed_j_max, lam=args.fixed_lam)
-    fixed_calibrator.fit(p_cal, split.y_cal)
+    dump(spline_calibrator, models_dir / "spline_fixed_calibrator.joblib")
     dump(
         fixed_calibrator,
         models_dir / "haar_fixed_calibrator.joblib",
@@ -688,6 +978,11 @@ def main() -> None:
         "parameters": {
             "fixed_j_max": args.fixed_j_max,
             "fixed_lam": args.fixed_lam,
+            "spline_n_knots": args.spline_n_knots,
+            "spline_degree": args.spline_degree,
+            "spline_include_bias": args.spline_include_bias,
+            "spline_c": args.spline_c,
+            "spline_max_iter": args.spline_max_iter,
             "subset_fracs": subset_fracs,
             "interval_subset_frac": args.interval_subset_frac,
             "interval_j_values": _parse_int_list(args.interval_j_values),
@@ -696,6 +991,7 @@ def main() -> None:
             "grid_cv_folds": args.cv_folds,
             "ece_bins": args.ece_bins,
             "plot_bins": args.plot_bins,
+            "estimator_grid_points": args.estimator_grid_points,
         },
         "gridsearch_best_params": {
             "j_max": int(grid.best_params_["j_max"]),
@@ -723,12 +1019,18 @@ def main() -> None:
     print(f"- {run_dir / 'gridsearch_cv_results.csv'}")
     print(f"- {run_dir / 'final_test_metrics.csv'}")
     print(f"- {run_dir / 'predictions_test.csv'}")
+    print(f"- {run_dir / 'estimator_curves.csv'}")
     print(f"- {run_dir / 'recommended_ranges.json'}")
     print(f"- {run_dir / 'run_metadata.json'}")
     print(f"- {plots_dir / 'reliability_base.png'}")
+    print(f"- {plots_dir / 'reliability_spline_fixed.png'}")
     print(f"- {plots_dir / 'reliability_haar_fixed.png'}")
     print(f"- {plots_dir / 'reliability_haar_gridsearch_best.png'}")
+    print(f"- {plots_dir / 'reliability_all_estimators_comparison.png'}")
+    print(f"- {plots_dir / 'reliability_all_estimators_panel.png'}")
+    print(f"- {plots_dir / 'estimator_all_calibrators_comparison.png'}")
     print(f"- {models_dir / 'base_model.joblib'}")
+    print(f"- {models_dir / 'spline_fixed_calibrator.joblib'}")
     print(f"- {models_dir / 'haar_fixed_calibrator.joblib'}")
     print(f"- {models_dir / 'haar_gridsearch_best_calibrator.joblib'}")
 
