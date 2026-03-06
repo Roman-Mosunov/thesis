@@ -422,67 +422,25 @@ def _run_subset_fixed_stage(
     return pd.DataFrame(rows)
 
 
-def _run_interval_scan(
+def _select_lambda_decade(
+    best_lambda: float,
     *,
-    scores_cal: NDArrayFloat,
-    y_cal: NDArrayInt,
-    scores_test: NDArrayFloat,
-    y_test: NDArrayInt,
-    subset_fraction: float,
-    j_values: list[int],
-    lam_values: list[float],
-    ece_bins: int,
-    random_state: int,
-) -> pd.DataFrame:
-    cal_idx = _subset_indices(y_cal, subset_fraction, random_state + 222)
-    test_idx = _subset_indices(y_test, subset_fraction, random_state + 333)
+    min_exp: int,
+    max_exp: int,
+) -> tuple[int, int]:
+    """Select decade [10^k, 10^(k+1)] within configured exponent bounds."""
+    if min_exp >= max_exp:
+        raise ValueError("min_exp must be smaller than max_exp.")
+    if best_lambda <= 0.0:
+        raise ValueError("best_lambda must be positive.")
 
-    y_cal_sub = y_cal[cal_idx]
-    p_cal_sub = scores_cal[cal_idx]
-    y_test_sub = y_test[test_idx]
-    p_test_sub = scores_test[test_idx]
-
-    rows: list[dict[str, Any]] = []
-    for j_max in j_values:
-        for lam in lam_values:
-            p_pred = _fit_haar(p_cal_sub, y_cal_sub, p_test_sub, j_max=j_max, lam=lam)
-            row = _metrics_row(
-                method="haar_scan",
-                phase="interval_scan",
-                y_true=y_test_sub,
-                y_prob=p_pred,
-                ece_bins=ece_bins,
-                j_max=j_max,
-                lam=lam,
-                subset_fraction=subset_fraction,
-            )
-            rows.append(row)
-    return pd.DataFrame(rows).sort_values("brier_score", ascending=True).reset_index(drop=True)
+    decade_start = int(np.floor(np.log10(best_lambda)))
+    decade_start = max(min_exp, min(decade_start, max_exp - 1))
+    return decade_start, decade_start + 1
 
 
-def _recommend_ranges(
-    scan_df: pd.DataFrame,
-    *,
-    top_quantile: float,
-) -> dict[str, Any]:
-    if scan_df.empty:
-        raise ValueError("scan_df is empty.")
-    if not 0.0 < top_quantile <= 1.0:
-        raise ValueError("top_quantile must be in (0, 1].")
-
-    n_top = max(1, int(np.ceil(scan_df.shape[0] * top_quantile)))
-    top = scan_df.nsmallest(n_top, "brier_score")
-
-    j_candidates = sorted(top["j_max"].astype(int).unique().tolist())
-    lam_candidates = sorted(top["lam"].astype(float).unique().tolist())
-    return {
-        "top_quantile": top_quantile,
-        "n_top_rows": n_top,
-        "j_candidates": j_candidates,
-        "lam_candidates": lam_candidates,
-        "recommended_j_interval": [int(min(j_candidates)), int(max(j_candidates))],
-        "recommended_lam_interval": [float(min(lam_candidates)), float(max(lam_candidates))],
-    }
+def _sorted_cv_results(grid: GridSearchCV) -> pd.DataFrame:
+    return pd.DataFrame(grid.cv_results_).sort_values("rank_test_score").reset_index(drop=True)
 
 
 def _run_gridsearch(
@@ -663,6 +621,13 @@ def _save_estimator_comparison_plot(
     ).to_csv(output_table_path, index=False)
 
     fig, ax = plt.subplots(figsize=(8, 6))
+    spline_label = f"Spline fixed (n_knots={spline_calibrator.n_knots})"
+    haar_fixed_label = (
+        f"Haar fixed (j_max={haar_fixed_calibrator.j_max}, lam={haar_fixed_calibrator.lam:g})"
+    )
+    haar_best_label = (
+        f"Haar best (j_max={haar_best_calibrator.j_max}, lam={haar_best_calibrator.lam:g})"
+    )
     ax.plot(
         x_grid,
         curves["identity"],
@@ -671,14 +636,14 @@ def _save_estimator_comparison_plot(
         linewidth=1.2,
         label="Identity",
     )
-    ax.plot(x_grid, curves["spline_fixed"], color="#55A868", linewidth=2.0, label="Spline fixed")
-    ax.plot(x_grid, curves["haar_fixed"], color="#C44E52", linewidth=2.0, label="Haar fixed")
+    ax.plot(x_grid, curves["spline_fixed"], color="#55A868", linewidth=2.0, label=spline_label)
+    ax.plot(x_grid, curves["haar_fixed"], color="#C44E52", linewidth=2.0, label=haar_fixed_label)
     ax.plot(
         x_grid,
         curves["haar_gridsearch_best"],
         color="#8172B2",
         linewidth=2.0,
-        label="Haar gridsearch best",
+        label=haar_best_label,
     )
     ax.set_xlim(0.0, 1.0)
     ax.set_ylim(0.0, 1.0)
@@ -701,7 +666,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--positive-label", type=str, default=None)
     parser.add_argument("--refresh-dataset", action="store_true")
 
-    parser.add_argument("--subset-fracs", type=str, default="0.1,0.25,0.5")
+    parser.add_argument("--subset-fracs", type=str, default="0.1,0.25,0.5,0.75,1.0")
     parser.add_argument("--spline-n-knots", type=int, default=5)
     parser.add_argument("--spline-degree", type=int, default=3)
     parser.add_argument("--spline-c", type=float, default=1.0)
@@ -710,18 +675,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fixed-j-max", type=int, default=6)
     parser.add_argument("--fixed-lam", type=float, default=1e-2)
 
-    parser.add_argument("--interval-subset-frac", type=float, default=0.5)
-    parser.add_argument("--interval-j-values", type=str, default="2,3,4,5,6,7,8")
-    parser.add_argument(
-        "--interval-lam-values",
-        type=str,
-        default="1e-4,3e-4,1e-3,3e-3,1e-2,3e-2,1e-1,3e-1,1.0",
-    )
-    parser.add_argument("--grid-top-quantile", type=float, default=0.25)
+    parser.add_argument("--grid-j-min", type=int, default=1)
+    parser.add_argument("--grid-j-max", type=int, default=6)
+    parser.add_argument("--lambda-min-exp", type=int, default=-6)
+    parser.add_argument("--lambda-max-exp", type=int, default=0)
+    parser.add_argument("--lambda-stage1-points", type=int, default=50)
+    parser.add_argument("--lambda-stage2-points", type=int, default=50)
     parser.add_argument("--cv-folds", type=int, default=5)
 
-    parser.add_argument("--ece-bins", type=int, default=15)
-    parser.add_argument("--plot-bins", type=int, default=15)
+    parser.add_argument("--ece-bins", type=int, default=20)
+    parser.add_argument("--plot-bins", type=int, default=20)
     parser.add_argument("--estimator-grid-points", type=int, default=1001)
     parser.add_argument("--random-state", type=int, default=42)
 
@@ -733,6 +696,17 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     started_at = _utc_now_iso()
+
+    if args.grid_j_min < 1:
+        raise ValueError("--grid-j-min must be >= 1.")
+    if args.grid_j_max < args.grid_j_min:
+        raise ValueError("--grid-j-max must be >= --grid-j-min.")
+    if args.lambda_max_exp <= args.lambda_min_exp:
+        raise ValueError("--lambda-max-exp must be > --lambda-min-exp.")
+    if args.lambda_stage1_points < 5:
+        raise ValueError("--lambda-stage1-points must be >= 5.")
+    if args.lambda_stage2_points < 5:
+        raise ValueError("--lambda-stage2-points must be >= 5.")
 
     repo_root = Path(__file__).resolve().parents[2]
     run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -796,36 +770,76 @@ def main() -> None:
         lam=args.fixed_lam,
     )
 
-    interval_scan = _run_interval_scan(
+    j_candidates = list(range(args.grid_j_min, args.grid_j_max + 1))
+    lambda_stage1_candidates = np.logspace(
+        args.lambda_min_exp,
+        args.lambda_max_exp,
+        args.lambda_stage1_points,
+    ).tolist()
+    grid_stage1 = _run_gridsearch(
         scores_cal=p_cal,
         y_cal=split.y_cal,
-        scores_test=p_test,
-        y_test=split.y_test,
-        subset_fraction=args.interval_subset_frac,
-        j_values=_parse_int_list(args.interval_j_values),
-        lam_values=_parse_float_list(args.interval_lam_values),
-        ece_bins=args.ece_bins,
+        j_candidates=j_candidates,
+        lam_candidates=lambda_stage1_candidates,
+        cv_folds=args.cv_folds,
         random_state=args.random_state,
     )
-    interval_scan.to_csv(run_dir / "interval_scan_results.csv", index=False)
+    stage1_results = _sorted_cv_results(grid_stage1)
+    stage1_results.to_csv(run_dir / "lambda_stage1_gridsearch_cv_results.csv", index=False)
+    # Backward-compatible alias for existing analysis references.
+    stage1_results.to_csv(run_dir / "interval_scan_results.csv", index=False)
 
-    recommendation = _recommend_ranges(interval_scan, top_quantile=args.grid_top_quantile)
+    best_stage1_lam = float(grid_stage1.best_params_["lam"])
+    decade_start_exp, decade_end_exp = _select_lambda_decade(
+        best_stage1_lam,
+        min_exp=args.lambda_min_exp,
+        max_exp=args.lambda_max_exp,
+    )
+    lambda_stage2_candidates = np.logspace(
+        decade_start_exp,
+        decade_end_exp,
+        args.lambda_stage2_points,
+    ).tolist()
+    grid = _run_gridsearch(
+        scores_cal=p_cal,
+        y_cal=split.y_cal,
+        j_candidates=j_candidates,
+        lam_candidates=lambda_stage2_candidates,
+        cv_folds=args.cv_folds,
+        random_state=args.random_state,
+    )
+    grid_results = _sorted_cv_results(grid)
+    grid_results.to_csv(run_dir / "lambda_stage2_gridsearch_cv_results.csv", index=False)
+    # Backward-compatible alias for existing analysis references.
+    grid_results.to_csv(run_dir / "gridsearch_cv_results.csv", index=False)
+
+    recommendation = {
+        "lambda_search_strategy": "two_stage_logspace",
+        "search_exponent_bounds": [args.lambda_min_exp, args.lambda_max_exp],
+        "j_candidates": j_candidates,
+        "stage1": {
+            "lambda_points": args.lambda_stage1_points,
+            "best_j_max": int(grid_stage1.best_params_["j_max"]),
+            "best_lam": best_stage1_lam,
+            "best_cv_neg_brier": float(grid_stage1.best_score_),
+        },
+        "selected_decade": {
+            "start_exp": decade_start_exp,
+            "end_exp": decade_end_exp,
+            "lower_bound": float(10.0**decade_start_exp),
+            "upper_bound": float(10.0**decade_end_exp),
+        },
+        "stage2": {
+            "lambda_points": args.lambda_stage2_points,
+            "best_j_max": int(grid.best_params_["j_max"]),
+            "best_lam": float(grid.best_params_["lam"]),
+            "best_cv_neg_brier": float(grid.best_score_),
+        },
+    }
     (run_dir / "recommended_ranges.json").write_text(
         json.dumps(recommendation, indent=2),
         encoding="utf-8",
     )
-
-    grid = _run_gridsearch(
-        scores_cal=p_cal,
-        y_cal=split.y_cal,
-        j_candidates=recommendation["j_candidates"],
-        lam_candidates=recommendation["lam_candidates"],
-        cv_folds=args.cv_folds,
-        random_state=args.random_state,
-    )
-
-    grid_results = pd.DataFrame(grid.cv_results_).sort_values("rank_test_score")
-    grid_results.to_csv(run_dir / "gridsearch_cv_results.csv", index=False)
 
     best_calibrator = grid.best_estimator_
     p_grid_best = best_calibrator.predict_proba(p_test.reshape(-1, 1))[:, 1]
@@ -984,15 +998,18 @@ def main() -> None:
             "spline_c": args.spline_c,
             "spline_max_iter": args.spline_max_iter,
             "subset_fracs": subset_fracs,
-            "interval_subset_frac": args.interval_subset_frac,
-            "interval_j_values": _parse_int_list(args.interval_j_values),
-            "interval_lam_values": _parse_float_list(args.interval_lam_values),
-            "grid_top_quantile": args.grid_top_quantile,
+            "grid_j_min": args.grid_j_min,
+            "grid_j_max": args.grid_j_max,
+            "lambda_min_exp": args.lambda_min_exp,
+            "lambda_max_exp": args.lambda_max_exp,
+            "lambda_stage1_points": args.lambda_stage1_points,
+            "lambda_stage2_points": args.lambda_stage2_points,
             "grid_cv_folds": args.cv_folds,
             "ece_bins": args.ece_bins,
             "plot_bins": args.plot_bins,
             "estimator_grid_points": args.estimator_grid_points,
         },
+        "two_stage_lambda_search": recommendation,
         "gridsearch_best_params": {
             "j_max": int(grid.best_params_["j_max"]),
             "lam": float(grid.best_params_["lam"]),
@@ -1015,6 +1032,8 @@ def main() -> None:
     print(f"Run directory: {run_dir}")
     print("Saved files:")
     print(f"- {run_dir / 'subset_fixed_results.csv'}")
+    print(f"- {run_dir / 'lambda_stage1_gridsearch_cv_results.csv'}")
+    print(f"- {run_dir / 'lambda_stage2_gridsearch_cv_results.csv'}")
     print(f"- {run_dir / 'interval_scan_results.csv'}")
     print(f"- {run_dir / 'gridsearch_cv_results.csv'}")
     print(f"- {run_dir / 'final_test_metrics.csv'}")

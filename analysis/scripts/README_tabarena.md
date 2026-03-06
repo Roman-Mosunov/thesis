@@ -34,14 +34,24 @@ Optional: force a dataset refresh from OpenML.
 uv run python analysis/scripts/run_tabarena_haar_experiment.py --refresh-dataset
 ```
 
+Quick development run (faster, less exhaustive than thesis defaults):
+
+```bash
+uv run python analysis/scripts/run_tabarena_haar_experiment.py \
+  --cv-folds 2 \
+  --lambda-stage1-points 50 \
+  --lambda-stage2-points 50
+```
+
 ## What each run executes
 
 1. Train base classifier and create calibration/test splits.
 2. Run subset-stage comparisons (base, spline, Haar fixed).
-3. Run Haar interval scan (`j_max`, `lam`) on subset.
-4. Run Haar full-data `GridSearchCV`.
-5. Evaluate all estimators on test split.
-6. Save per-estimator reliability diagrams and global comparison plots.
+3. Run Haar two-stage `GridSearchCV` on calibration data:
+   - Stage 1: broad logspace over `10^-6` to `10^0` to identify the best decade.
+   - Stage 2: dense logspace within the selected decade.
+4. Evaluate all estimators on test split.
+5. Save per-estimator reliability diagrams and global comparison plots.
 
 ## Main adjustable parameters
 
@@ -60,12 +70,14 @@ uv run python analysis/scripts/run_tabarena_haar_experiment.py --refresh-dataset
 - Haar fixed:
   - `--fixed-j-max`
   - `--fixed-lam`
-- Haar interval/grid:
-  - `--interval-subset-frac`
-  - `--interval-j-values`
-  - `--interval-lam-values`
-  - `--grid-top-quantile`
-  - `--cv-folds`
+- Haar two-stage grid search:
+  - `--grid-j-min` (default `1`)
+  - `--grid-j-max` (default `6`)
+  - `--lambda-min-exp` (default `-6`)
+  - `--lambda-max-exp` (default `0`)
+  - `--lambda-stage1-points` (default `50`)
+  - `--lambda-stage2-points` (default `50`)
+  - `--cv-folds` (`5`)
 - Plotting:
   - `--plot-bins`
   - `--ece-bins`
@@ -79,8 +91,10 @@ Run directory pattern:
 
 Saved tables:
 - `subset_fixed_results.csv`
-- `interval_scan_results.csv`
-- `gridsearch_cv_results.csv`
+- `lambda_stage1_gridsearch_cv_results.csv`
+- `lambda_stage2_gridsearch_cv_results.csv`
+- `interval_scan_results.csv` (backward-compatible alias of stage-1 grid results)
+- `gridsearch_cv_results.csv` (backward-compatible alias of stage-2 grid results)
 - `final_test_metrics.csv`
 - `predictions_test.csv`
 - `estimator_curves.csv`
