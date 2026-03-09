@@ -1,16 +1,30 @@
 import numpy as np
 import pytest
-from splinecal.calibrators import HaarMonotoneRidgeCalibrator, SplineBinaryCalibrator
+from splinecal.calibrators import (
+    BetaBinaryCalibrator,
+    HaarMonotoneRidgeCalibrator,
+    IsotonicBinaryCalibrator,
+    PlattBinaryCalibrator,
+    SplineBinaryCalibrator,
+)
 
 
-def test_calibrator_fit_predict_proba_shape() -> None:
+@pytest.mark.parametrize(
+    "calibrator",
+    [
+        SplineBinaryCalibrator(n_knots=4),
+        PlattBinaryCalibrator(),
+        IsotonicBinaryCalibrator(),
+        BetaBinaryCalibrator(),
+    ],
+)
+def test_calibrator_fit_predict_proba_shape(calibrator) -> None:
     rng = np.random.default_rng(42)
     raw = rng.uniform(0.01, 0.99, size=200)
     y = (rng.uniform(size=200) < raw).astype(int)
 
-    cal = SplineBinaryCalibrator(n_knots=4)
-    cal.fit(raw, y)
-    proba = cal.predict_proba(raw)
+    calibrator.fit(raw, y)
+    proba = calibrator.predict_proba(raw)
 
     assert proba.shape == (200, 2)
     assert np.allclose(proba.sum(axis=1), 1.0)
@@ -24,6 +38,18 @@ def test_calibrator_rejects_non_binary_target() -> None:
 
     with pytest.raises(ValueError, match="binary"):
         cal.fit(x, y)
+
+
+def test_beta_calibrator_supports_non_numeric_labels() -> None:
+    rng = np.random.default_rng(123)
+    scores = rng.uniform(0.0, 1.0, size=300)
+    y = np.where(rng.uniform(size=300) < scores, "yes", "no")
+
+    cal = BetaBinaryCalibrator()
+    cal.fit(scores, y)
+    pred = cal.predict(scores)
+
+    assert set(np.unique(pred)) <= {"no", "yes"}
 
 
 def test_haar_monotone_calibrator_predict_proba_is_monotone() -> None:

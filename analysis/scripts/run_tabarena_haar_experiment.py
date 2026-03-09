@@ -2,9 +2,8 @@
 
 This script implements:
 1) subset experiments first,
-2) fixed j_max/lambda experiments,
-3) interval discovery for j_max/lambda,
-4) full-data GridSearchCV.
+2) interval discovery for Haar j_max/lambda,
+3) full-data GridSearchCV for Haar best model.
 
 Outputs are stored under `analysis/outputs/tabarena/...` and include:
 - result tables for each stage,
@@ -46,7 +45,10 @@ from sklearn.model_selection import (
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 from splinecal import (
+    BetaBinaryCalibrator,
     HaarMonotoneRidgeCalibrator,
+    IsotonicBinaryCalibrator,
+    PlattBinaryCalibrator,
     SplineBinaryCalibrator,
     brier_calibration_refinement_loss,
     brier_score,
@@ -299,19 +301,6 @@ def _metrics_row(
     }
 
 
-def _fit_haar(
-    scores_cal: NDArrayFloat,
-    y_cal: NDArrayInt,
-    scores_eval: NDArrayFloat,
-    *,
-    j_max: int,
-    lam: float,
-) -> NDArrayFloat:
-    calibrator = HaarMonotoneRidgeCalibrator(j_max=j_max, lam=lam)
-    calibrator.fit(scores_cal, y_cal)
-    return calibrator.predict_proba(scores_eval)[:, 1]
-
-
 def _fit_spline(
     scores_cal: NDArrayFloat,
     y_cal: NDArrayInt,
@@ -330,6 +319,42 @@ def _fit_spline(
         c=c,
         max_iter=max_iter,
     )
+    calibrator.fit(scores_cal, y_cal)
+    return calibrator.predict_proba(scores_eval)[:, 1]
+
+
+def _fit_platt(
+    scores_cal: NDArrayFloat,
+    y_cal: NDArrayInt,
+    scores_eval: NDArrayFloat,
+    *,
+    c: float,
+    max_iter: int,
+) -> NDArrayFloat:
+    calibrator = PlattBinaryCalibrator(c=c, max_iter=max_iter)
+    calibrator.fit(scores_cal, y_cal)
+    return calibrator.predict_proba(scores_eval)[:, 1]
+
+
+def _fit_isotonic(
+    scores_cal: NDArrayFloat,
+    y_cal: NDArrayInt,
+    scores_eval: NDArrayFloat,
+) -> NDArrayFloat:
+    calibrator = IsotonicBinaryCalibrator(out_of_bounds="clip")
+    calibrator.fit(scores_cal, y_cal)
+    return calibrator.predict_proba(scores_eval)[:, 1]
+
+
+def _fit_beta(
+    scores_cal: NDArrayFloat,
+    y_cal: NDArrayInt,
+    scores_eval: NDArrayFloat,
+    *,
+    c: float,
+    max_iter: int,
+) -> NDArrayFloat:
+    calibrator = BetaBinaryCalibrator(c=c, max_iter=max_iter)
     calibrator.fit(scores_cal, y_cal)
     return calibrator.predict_proba(scores_eval)[:, 1]
 
@@ -355,20 +380,22 @@ def _subset_indices(y: NDArrayInt, frac: float, random_state: int) -> NDArrayInt
         return sampled_arr
 
 
-def _run_subset_fixed_stage(
+def _run_subset_stage(
     *,
     subset_fracs: list[float],
     scores_cal: NDArrayFloat,
     y_cal: NDArrayInt,
     scores_test: NDArrayFloat,
     y_test: NDArrayInt,
-    fixed_j_max: int,
-    fixed_lam: float,
     spline_n_knots: int,
     spline_degree: int,
     spline_include_bias: bool,
     spline_c: float,
     spline_max_iter: int,
+    platt_c: float,
+    platt_max_iter: int,
+    beta_c: float,
+    beta_max_iter: int,
     ece_bins: int,
     random_state: int,
 ) -> pd.DataFrame:
@@ -385,8 +412,8 @@ def _run_subset_fixed_stage(
 
         rows.append(
             _metrics_row(
-                method="base_model",
-                phase="subset_fixed",
+                method="uncalibrated_logistic",
+                phase="subset_comparison",
                 y_true=y_test_sub,
                 y_prob=p_test_sub,
                 ece_bins=ece_bins,
@@ -407,7 +434,7 @@ def _run_subset_fixed_stage(
         rows.append(
             _metrics_row(
                 method="spline_fixed",
-                phase="subset_fixed",
+                phase="subset_comparison",
                 y_true=y_test_sub,
                 y_prob=p_spline,
                 ece_bins=ece_bins,
@@ -416,22 +443,54 @@ def _run_subset_fixed_stage(
             )
         )
 
-        p_fixed = _fit_haar(
+        p_platt = _fit_platt(
             p_cal_sub,
             y_cal_sub,
             p_test_sub,
-            j_max=fixed_j_max,
-            lam=fixed_lam,
+            c=platt_c,
+            max_iter=platt_max_iter,
         )
         rows.append(
             _metrics_row(
-                method="haar_fixed",
-                phase="subset_fixed",
+                method="platt",
+                phase="subset_comparison",
                 y_true=y_test_sub,
-                y_prob=p_fixed,
+                y_prob=p_platt,
                 ece_bins=ece_bins,
-                j_max=fixed_j_max,
-                lam=fixed_lam,
+                subset_fraction=frac,
+            )
+        )
+
+        p_isotonic = _fit_isotonic(
+            p_cal_sub,
+            y_cal_sub,
+            p_test_sub,
+        )
+        rows.append(
+            _metrics_row(
+                method="isotonic",
+                phase="subset_comparison",
+                y_true=y_test_sub,
+                y_prob=p_isotonic,
+                ece_bins=ece_bins,
+                subset_fraction=frac,
+            )
+        )
+
+        p_beta = _fit_beta(
+            p_cal_sub,
+            y_cal_sub,
+            p_test_sub,
+            c=beta_c,
+            max_iter=beta_max_iter,
+        )
+        rows.append(
+            _metrics_row(
+                method="beta",
+                phase="subset_comparison",
+                y_true=y_test_sub,
+                y_prob=p_beta,
+                ece_bins=ece_bins,
                 subset_fraction=frac,
             )
         )
@@ -489,17 +548,21 @@ def _save_predictions_table(
     *,
     output_path: Path,
     y_true: NDArrayInt,
-    prob_base: NDArrayFloat,
+    prob_uncalibrated_logistic: NDArrayFloat,
     prob_spline: NDArrayFloat,
-    prob_fixed: NDArrayFloat,
+    prob_platt: NDArrayFloat,
+    prob_isotonic: NDArrayFloat,
+    prob_beta: NDArrayFloat,
     prob_gridsearch_best: NDArrayFloat,
 ) -> None:
     table = pd.DataFrame(
         {
             "y_true": y_true.astype(int),
-            "prob_base": prob_base,
+            "prob_uncalibrated_logistic": prob_uncalibrated_logistic,
             "prob_spline": prob_spline,
-            "prob_fixed": prob_fixed,
+            "prob_platt": prob_platt,
+            "prob_isotonic": prob_isotonic,
+            "prob_beta": prob_beta,
             "prob_gridsearch_best": prob_gridsearch_best,
         }
     )
@@ -520,9 +583,11 @@ def _save_reliability_comparison_plot(
     ax.plot([0.0, 1.0], [0.0, 1.0], linestyle="--", color="#666666", linewidth=1.2, label="Perfect")
 
     style_map = [
-        ("base_model", "Base", "#4C72B0"),
+        ("uncalibrated_logistic", "Uncalibrated logistic", "#4C72B0"),
         ("spline_fixed", "Spline", "#55A868"),
-        ("haar_fixed", "Haar fixed", "#C44E52"),
+        ("platt", "Platt", "#C44E52"),
+        ("isotonic", "Isotonic", "#CCB974"),
+        ("beta", "Beta", "#64B5CD"),
         ("haar_gridsearch_best", "Haar best", "#8172B2"),
     ]
     for method, label, color in style_map:
@@ -567,11 +632,13 @@ def _save_reliability_panel_plot(
 ) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    fig, axes = plt.subplots(2, 2, figsize=(11, 9), sharex=True, sharey=True)
+    fig, axes = plt.subplots(2, 3, figsize=(15, 8), sharex=True, sharey=True)
     method_panels = [
-        ("base_model", "Base model", "#4C72B0"),
+        ("uncalibrated_logistic", "Uncalibrated logistic", "#4C72B0"),
         ("spline_fixed", "Spline", "#55A868"),
-        ("haar_fixed", "Haar fixed", "#C44E52"),
+        ("platt", "Platt", "#C44E52"),
+        ("isotonic", "Isotonic", "#CCB974"),
+        ("beta", "Beta", "#64B5CD"),
         ("haar_gridsearch_best", "Haar best", "#8172B2"),
     ]
 
@@ -608,7 +675,9 @@ def _save_estimator_comparison_plot(
     output_plot_path: Path,
     output_table_path: Path,
     spline_calibrator: SplineBinaryCalibrator,
-    haar_fixed_calibrator: HaarMonotoneRidgeCalibrator,
+    platt_calibrator: PlattBinaryCalibrator,
+    isotonic_calibrator: IsotonicBinaryCalibrator,
+    beta_calibrator: BetaBinaryCalibrator,
     haar_best_calibrator: HaarMonotoneRidgeCalibrator,
     grid_points: int,
 ) -> tuple[Path, Path]:
@@ -622,7 +691,9 @@ def _save_estimator_comparison_plot(
     curves = {
         "identity": x_grid,
         "spline_fixed": spline_calibrator.predict_proba(x_grid)[:, 1],
-        "haar_fixed": haar_fixed_calibrator.predict_proba(x_grid)[:, 1],
+        "platt": platt_calibrator.predict_proba(x_grid)[:, 1],
+        "isotonic": isotonic_calibrator.predict_proba(x_grid)[:, 1],
+        "beta": beta_calibrator.predict_proba(x_grid)[:, 1],
         "haar_gridsearch_best": haar_best_calibrator.predict_proba(x_grid)[:, 1],
     }
 
@@ -631,16 +702,18 @@ def _save_estimator_comparison_plot(
             "raw_score": x_grid,
             "identity": curves["identity"],
             "spline_fixed": curves["spline_fixed"],
-            "haar_fixed": curves["haar_fixed"],
+            "platt": curves["platt"],
+            "isotonic": curves["isotonic"],
+            "beta": curves["beta"],
             "haar_gridsearch_best": curves["haar_gridsearch_best"],
         }
     ).to_csv(output_table_path, index=False)
 
     fig, ax = plt.subplots(figsize=(8, 6))
     spline_label = f"Spline fixed (n_knots={spline_calibrator.n_knots})"
-    haar_fixed_label = (
-        f"Haar fixed (j_max={haar_fixed_calibrator.j_max}, lam={haar_fixed_calibrator.lam:g})"
-    )
+    platt_label = f"Platt (C={platt_calibrator.c:g})"
+    isotonic_label = "Isotonic"
+    beta_label = f"Beta (C={beta_calibrator.c:g})"
     haar_best_label = (
         f"Haar best (j_max={haar_best_calibrator.j_max}, lam={haar_best_calibrator.lam:g})"
     )
@@ -653,7 +726,9 @@ def _save_estimator_comparison_plot(
         label="Identity",
     )
     ax.plot(x_grid, curves["spline_fixed"], color="#55A868", linewidth=2.0, label=spline_label)
-    ax.plot(x_grid, curves["haar_fixed"], color="#C44E52", linewidth=2.0, label=haar_fixed_label)
+    ax.plot(x_grid, curves["platt"], color="#C44E52", linewidth=2.0, label=platt_label)
+    ax.plot(x_grid, curves["isotonic"], color="#CCB974", linewidth=2.0, label=isotonic_label)
+    ax.plot(x_grid, curves["beta"], color="#64B5CD", linewidth=2.0, label=beta_label)
     ax.plot(
         x_grid,
         curves["haar_gridsearch_best"],
@@ -665,13 +740,151 @@ def _save_estimator_comparison_plot(
     ax.set_ylim(0.0, 1.0)
     ax.set_xlabel("Raw model score")
     ax.set_ylabel("Calibrated probability")
-    ax.set_title("Estimator Mapping Comparison: All Calibrators")
+    ax.set_title("Estimator Mapping Comparison")
     ax.grid(alpha=0.3)
     ax.legend(loc="lower right")
     fig.tight_layout()
     fig.savefig(output_plot_path, dpi=180)
     plt.close(fig)
     return output_plot_path, output_table_path
+
+
+def _reliability_summary_row(
+    *,
+    method: str,
+    y_true: NDArrayInt,
+    probs: NDArrayFloat,
+    n_bins: int,
+    ece_bins: int,
+) -> dict[str, Any]:
+    probs_arr = np.asarray(probs, dtype=float).ravel()
+    _, points = reliability_points(y_true, probs_arr, n_bins=n_bins)
+    conf = points[:, 0]
+    acc = points[:, 1]
+    valid = (~np.isnan(conf)) & (~np.isnan(acc))
+    abs_gap = np.abs(acc[valid] - conf[valid]) if np.any(valid) else np.asarray([0.0], dtype=float)
+
+    brier_cl, brier_rl = brier_calibration_refinement_loss(y_true, probs_arr, n_bins=ece_bins)
+    log_cl, log_rl = log_loss_calibration_refinement_loss(y_true, probs_arr, n_bins=ece_bins)
+
+    return {
+        "method": method,
+        "n_samples": int(y_true.shape[0]),
+        "plot_bins": n_bins,
+        "non_empty_bins": int(np.sum(valid)),
+        "brier_score": brier_score(y_true, probs_arr),
+        "brier_calibration_loss": brier_cl,
+        "brier_refinement_loss": brier_rl,
+        "ece": expected_calibration_error(y_true, probs_arr, n_bins=ece_bins),
+        "log_loss": float(log_loss(y_true, np.clip(probs_arr, 1e-15, 1.0 - 1e-15))),
+        "calibration_loss": log_cl,
+        "refinement_loss": log_rl,
+        "mean_abs_bin_gap": float(np.mean(abs_gap)),
+        "max_abs_bin_gap": float(np.max(abs_gap)),
+    }
+
+
+def _save_graph_summaries(
+    *,
+    run_dir: Path,
+    plots_dir: Path,
+    y_true: NDArrayInt,
+    probs_by_method: dict[str, NDArrayFloat],
+    estimator_curves_path: Path,
+    plot_bins: int,
+    ece_bins: int,
+) -> tuple[Path, Path, Path]:
+    reliability_rows = [
+        _reliability_summary_row(
+            method=method,
+            y_true=y_true,
+            probs=probs,
+            n_bins=plot_bins,
+            ece_bins=ece_bins,
+        )
+        for method, probs in probs_by_method.items()
+    ]
+    reliability_df = pd.DataFrame(reliability_rows).sort_values(
+        ["brier_score", "ece"],
+        ascending=[True, True],
+    )
+    reliability_csv_path = run_dir / "graph_summary_reliability.csv"
+    reliability_df.to_csv(reliability_csv_path, index=False)
+
+    estimator_df = pd.read_csv(estimator_curves_path)
+    identity = estimator_df["identity"].to_numpy(dtype=float)
+    mapping_rows: list[dict[str, Any]] = []
+    for column in estimator_df.columns:
+        if column in {"raw_score", "identity"}:
+            continue
+        curve = estimator_df[column].to_numpy(dtype=float)
+        delta = curve - identity
+        mapping_rows.append(
+            {
+                "method": column,
+                "mean_abs_shift_from_identity": float(np.mean(np.abs(delta))),
+                "max_abs_shift_from_identity": float(np.max(np.abs(delta))),
+                "mean_signed_shift_from_identity": float(np.mean(delta)),
+                "is_monotone_non_decreasing": bool(np.all(np.diff(curve) >= -1e-8)),
+                "curve_min": float(np.min(curve)),
+                "curve_max": float(np.max(curve)),
+            }
+        )
+
+    mapping_df = pd.DataFrame(mapping_rows).sort_values(
+        "mean_abs_shift_from_identity",
+        ascending=False,
+    )
+    mapping_csv_path = run_dir / "graph_summary_estimator_mapping.csv"
+    mapping_df.to_csv(mapping_csv_path, index=False)
+
+    best_brier = reliability_df.loc[reliability_df["brier_score"].idxmin()]
+    best_ece = reliability_df.loc[reliability_df["ece"].idxmin()]
+    best_log_loss = reliability_df.loc[reliability_df["log_loss"].idxmin()]
+    strongest_mapping = mapping_df.iloc[0]
+
+    md_lines = [
+        "# Graph Summaries",
+        "",
+        "## Reliability Graphs",
+        "Metrics aggregated from per-estimator reliability curves (including all combined panels).",
+        "",
+        "```csv",
+        reliability_df.to_csv(index=False, float_format="%.6f").strip(),
+        "```",
+        "",
+        "Highlights:",
+        f"- Lowest Brier: `{best_brier['method']}` ({best_brier['brier_score']:.6f})",
+        f"- Lowest ECE: `{best_ece['method']}` ({best_ece['ece']:.6f})",
+        f"- Lowest log-loss: `{best_log_loss['method']}` ({best_log_loss['log_loss']:.6f})",
+        "",
+        "## Estimator Mapping Graph",
+        "Summary statistics from the `raw score -> calibrated probability` mapping plot.",
+        "",
+        "```csv",
+        mapping_df.to_csv(index=False, float_format="%.6f").strip(),
+        "```",
+        "",
+        "Highlights:",
+        (
+            f"- Largest mean absolute shift from identity: `{strongest_mapping['method']}` "
+            f"({strongest_mapping['mean_abs_shift_from_identity']:.6f})"
+        ),
+        "",
+        "## Generated Plot Files",
+        f"- `{plots_dir / 'reliability_uncalibrated_logistic.png'}`",
+        f"- `{plots_dir / 'reliability_spline_fixed.png'}`",
+        f"- `{plots_dir / 'reliability_platt.png'}`",
+        f"- `{plots_dir / 'reliability_isotonic.png'}`",
+        f"- `{plots_dir / 'reliability_beta.png'}`",
+        f"- `{plots_dir / 'reliability_haar_gridsearch_best.png'}`",
+        f"- `{plots_dir / 'reliability_all_estimators_comparison.png'}`",
+        f"- `{plots_dir / 'reliability_all_estimators_panel.png'}`",
+        f"- `{plots_dir / 'estimator_all_calibrators_comparison.png'}`",
+    ]
+    summary_md_path = run_dir / "graph_summaries.md"
+    summary_md_path.write_text("\n".join(md_lines) + "\n", encoding="utf-8")
+    return reliability_csv_path, mapping_csv_path, summary_md_path
 
 
 def parse_args() -> argparse.Namespace:
@@ -688,8 +901,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--spline-c", type=float, default=1.0)
     parser.add_argument("--spline-max-iter", type=int, default=500)
     parser.add_argument("--spline-include-bias", action="store_true")
-    parser.add_argument("--fixed-j-max", type=int, default=6)
-    parser.add_argument("--fixed-lam", type=float, default=1e-2)
+    parser.add_argument("--platt-c", type=float, default=1.0)
+    parser.add_argument("--platt-max-iter", type=int, default=500)
+    parser.add_argument("--beta-c", type=float, default=1.0)
+    parser.add_argument("--beta-max-iter", type=int, default=500)
 
     parser.add_argument("--grid-j-min", type=int, default=1)
     parser.add_argument("--grid-j-max", type=int, default=6)
@@ -750,7 +965,7 @@ def main() -> None:
     p_test = base_model.predict_proba(split.x_test)[:, 1]
 
     subset_fracs = _parse_float_list(args.subset_fracs)
-    subset_df = _run_subset_fixed_stage(
+    subset_df = _run_subset_stage(
         subset_fracs=subset_fracs,
         scores_cal=p_cal,
         y_cal=split.y_cal,
@@ -761,12 +976,14 @@ def main() -> None:
         spline_include_bias=args.spline_include_bias,
         spline_c=args.spline_c,
         spline_max_iter=args.spline_max_iter,
-        fixed_j_max=args.fixed_j_max,
-        fixed_lam=args.fixed_lam,
+        platt_c=args.platt_c,
+        platt_max_iter=args.platt_max_iter,
+        beta_c=args.beta_c,
+        beta_max_iter=args.beta_max_iter,
         ece_bins=args.ece_bins,
         random_state=args.random_state,
     )
-    subset_df.to_csv(run_dir / "subset_fixed_results.csv", index=False)
+    subset_df.to_csv(run_dir / "subset_results.csv", index=False)
 
     spline_calibrator = SplineBinaryCalibrator(
         n_knots=args.spline_n_knots,
@@ -778,13 +995,17 @@ def main() -> None:
     spline_calibrator.fit(p_cal, split.y_cal)
     p_spline_full = spline_calibrator.predict_proba(p_test)[:, 1]
 
-    p_fixed_full = _fit_haar(
-        p_cal,
-        split.y_cal,
-        p_test,
-        j_max=args.fixed_j_max,
-        lam=args.fixed_lam,
-    )
+    platt_calibrator = PlattBinaryCalibrator(c=args.platt_c, max_iter=args.platt_max_iter)
+    platt_calibrator.fit(p_cal, split.y_cal)
+    p_platt_full = platt_calibrator.predict_proba(p_test)[:, 1]
+
+    isotonic_calibrator = IsotonicBinaryCalibrator(out_of_bounds="clip")
+    isotonic_calibrator.fit(p_cal, split.y_cal)
+    p_isotonic_full = isotonic_calibrator.predict_proba(p_test)[:, 1]
+
+    beta_calibrator = BetaBinaryCalibrator(c=args.beta_c, max_iter=args.beta_max_iter)
+    beta_calibrator.fit(p_cal, split.y_cal)
+    p_beta_full = beta_calibrator.predict_proba(p_test)[:, 1]
 
     j_candidates = list(range(args.grid_j_min, args.grid_j_max + 1))
     lambda_stage1_candidates = np.logspace(
@@ -860,12 +1081,9 @@ def main() -> None:
     best_calibrator = grid.best_estimator_
     p_grid_best = best_calibrator.predict_proba(p_test.reshape(-1, 1))[:, 1]
 
-    fixed_calibrator = HaarMonotoneRidgeCalibrator(j_max=args.fixed_j_max, lam=args.fixed_lam)
-    fixed_calibrator.fit(p_cal, split.y_cal)
-
     final_rows = [
         _metrics_row(
-            method="base_model",
+            method="uncalibrated_logistic",
             phase="full_test",
             y_true=split.y_test,
             y_prob=p_test,
@@ -880,13 +1098,25 @@ def main() -> None:
             spline_n_knots=args.spline_n_knots,
         ),
         _metrics_row(
-            method="haar_fixed",
+            method="platt",
             phase="full_test",
             y_true=split.y_test,
-            y_prob=p_fixed_full,
+            y_prob=p_platt_full,
             ece_bins=args.ece_bins,
-            j_max=args.fixed_j_max,
-            lam=args.fixed_lam,
+        ),
+        _metrics_row(
+            method="isotonic",
+            phase="full_test",
+            y_true=split.y_test,
+            y_prob=p_isotonic_full,
+            ece_bins=args.ece_bins,
+        ),
+        _metrics_row(
+            method="beta",
+            phase="full_test",
+            y_true=split.y_test,
+            y_prob=p_beta_full,
+            ece_bins=args.ece_bins,
         ),
         _metrics_row(
             method="haar_gridsearch_best",
@@ -904,19 +1134,21 @@ def main() -> None:
     _save_predictions_table(
         output_path=run_dir / "predictions_test.csv",
         y_true=split.y_test,
-        prob_base=p_test,
+        prob_uncalibrated_logistic=p_test,
         prob_spline=p_spline_full,
-        prob_fixed=p_fixed_full,
+        prob_platt=p_platt_full,
+        prob_isotonic=p_isotonic_full,
+        prob_beta=p_beta_full,
         prob_gridsearch_best=p_grid_best,
     )
 
     save_reliability_diagram(
         split.y_test,
         p_test,
-        output_path=plots_dir / "reliability_base.png",
+        output_path=plots_dir / "reliability_uncalibrated_logistic.png",
         n_bins=args.plot_bins,
         ece_bins=args.ece_bins,
-        title="Base model reliability",
+        title="Uncalibrated logistic reliability",
     )
     save_reliability_diagram(
         split.y_test,
@@ -928,11 +1160,27 @@ def main() -> None:
     )
     save_reliability_diagram(
         split.y_test,
-        p_fixed_full,
-        output_path=plots_dir / "reliability_haar_fixed.png",
+        p_platt_full,
+        output_path=plots_dir / "reliability_platt.png",
         n_bins=args.plot_bins,
         ece_bins=args.ece_bins,
-        title=f"Haar fixed reliability (j_max={args.fixed_j_max}, lam={args.fixed_lam:g})",
+        title=f"Platt reliability (C={args.platt_c:g})",
+    )
+    save_reliability_diagram(
+        split.y_test,
+        p_isotonic_full,
+        output_path=plots_dir / "reliability_isotonic.png",
+        n_bins=args.plot_bins,
+        ece_bins=args.ece_bins,
+        title="Isotonic reliability",
+    )
+    save_reliability_diagram(
+        split.y_test,
+        p_beta_full,
+        output_path=plots_dir / "reliability_beta.png",
+        n_bins=args.plot_bins,
+        ece_bins=args.ece_bins,
+        title=f"Beta reliability (C={args.beta_c:g})",
     )
     save_reliability_diagram(
         split.y_test,
@@ -945,45 +1193,55 @@ def main() -> None:
             f"lam={grid.best_params_['lam']:g})"
         ),
     )
+    probs_for_comparison = {
+        "uncalibrated_logistic": p_test,
+        "spline_fixed": p_spline_full,
+        "platt": p_platt_full,
+        "isotonic": p_isotonic_full,
+        "beta": p_beta_full,
+        "haar_gridsearch_best": p_grid_best,
+    }
     _save_reliability_comparison_plot(
         y_true=split.y_test,
         output_path=plots_dir / "reliability_all_estimators_comparison.png",
-        probs_by_method={
-            "base_model": p_test,
-            "spline_fixed": p_spline_full,
-            "haar_fixed": p_fixed_full,
-            "haar_gridsearch_best": p_grid_best,
-        },
+        probs_by_method=probs_for_comparison,
         n_bins=args.plot_bins,
         ece_bins=args.ece_bins,
     )
     _save_reliability_panel_plot(
         y_true=split.y_test,
         output_path=plots_dir / "reliability_all_estimators_panel.png",
-        probs_by_method={
-            "base_model": p_test,
-            "spline_fixed": p_spline_full,
-            "haar_fixed": p_fixed_full,
-            "haar_gridsearch_best": p_grid_best,
-        },
+        probs_by_method=probs_for_comparison,
         n_bins=args.plot_bins,
         ece_bins=args.ece_bins,
     )
-    _save_estimator_comparison_plot(
+    estimator_plot_path, estimator_table_path = _save_estimator_comparison_plot(
         output_plot_path=plots_dir / "estimator_all_calibrators_comparison.png",
         output_table_path=run_dir / "estimator_curves.csv",
         spline_calibrator=spline_calibrator,
-        haar_fixed_calibrator=fixed_calibrator,
+        platt_calibrator=platt_calibrator,
+        isotonic_calibrator=isotonic_calibrator,
+        beta_calibrator=beta_calibrator,
         haar_best_calibrator=best_calibrator,
         grid_points=args.estimator_grid_points,
+    )
+    graph_summary_reliability_path, graph_summary_mapping_path, graph_summary_md_path = (
+        _save_graph_summaries(
+            run_dir=run_dir,
+            plots_dir=plots_dir,
+            y_true=split.y_test,
+            probs_by_method=probs_for_comparison,
+            estimator_curves_path=estimator_table_path,
+            plot_bins=args.plot_bins,
+            ece_bins=args.ece_bins,
+        )
     )
 
     dump(base_model, models_dir / "base_model.joblib")
     dump(spline_calibrator, models_dir / "spline_fixed_calibrator.joblib")
-    dump(
-        fixed_calibrator,
-        models_dir / "haar_fixed_calibrator.joblib",
-    )
+    dump(platt_calibrator, models_dir / "platt_calibrator.joblib")
+    dump(isotonic_calibrator, models_dir / "isotonic_calibrator.joblib")
+    dump(beta_calibrator, models_dir / "beta_calibrator.joblib")
     dump(best_calibrator, models_dir / "haar_gridsearch_best_calibrator.joblib")
 
     finished_at = _utc_now_iso()
@@ -1006,13 +1264,15 @@ def main() -> None:
             "random_state": args.random_state,
         },
         "parameters": {
-            "fixed_j_max": args.fixed_j_max,
-            "fixed_lam": args.fixed_lam,
             "spline_n_knots": args.spline_n_knots,
             "spline_degree": args.spline_degree,
             "spline_include_bias": args.spline_include_bias,
             "spline_c": args.spline_c,
             "spline_max_iter": args.spline_max_iter,
+            "platt_c": args.platt_c,
+            "platt_max_iter": args.platt_max_iter,
+            "beta_c": args.beta_c,
+            "beta_max_iter": args.beta_max_iter,
             "subset_fracs": subset_fracs,
             "grid_j_min": args.grid_j_min,
             "grid_j_max": args.grid_j_max,
@@ -1047,7 +1307,7 @@ def main() -> None:
 
     print(f"Run directory: {run_dir}")
     print("Saved files:")
-    print(f"- {run_dir / 'subset_fixed_results.csv'}")
+    print(f"- {run_dir / 'subset_results.csv'}")
     print(f"- {run_dir / 'lambda_stage1_gridsearch_cv_results.csv'}")
     print(f"- {run_dir / 'lambda_stage2_gridsearch_cv_results.csv'}")
     print(f"- {run_dir / 'interval_scan_results.csv'}")
@@ -1055,18 +1315,25 @@ def main() -> None:
     print(f"- {run_dir / 'final_test_metrics.csv'}")
     print(f"- {run_dir / 'predictions_test.csv'}")
     print(f"- {run_dir / 'estimator_curves.csv'}")
+    print(f"- {graph_summary_reliability_path}")
+    print(f"- {graph_summary_mapping_path}")
+    print(f"- {graph_summary_md_path}")
     print(f"- {run_dir / 'recommended_ranges.json'}")
     print(f"- {run_dir / 'run_metadata.json'}")
-    print(f"- {plots_dir / 'reliability_base.png'}")
+    print(f"- {plots_dir / 'reliability_uncalibrated_logistic.png'}")
     print(f"- {plots_dir / 'reliability_spline_fixed.png'}")
-    print(f"- {plots_dir / 'reliability_haar_fixed.png'}")
+    print(f"- {plots_dir / 'reliability_platt.png'}")
+    print(f"- {plots_dir / 'reliability_isotonic.png'}")
+    print(f"- {plots_dir / 'reliability_beta.png'}")
     print(f"- {plots_dir / 'reliability_haar_gridsearch_best.png'}")
     print(f"- {plots_dir / 'reliability_all_estimators_comparison.png'}")
     print(f"- {plots_dir / 'reliability_all_estimators_panel.png'}")
-    print(f"- {plots_dir / 'estimator_all_calibrators_comparison.png'}")
+    print(f"- {estimator_plot_path}")
     print(f"- {models_dir / 'base_model.joblib'}")
     print(f"- {models_dir / 'spline_fixed_calibrator.joblib'}")
-    print(f"- {models_dir / 'haar_fixed_calibrator.joblib'}")
+    print(f"- {models_dir / 'platt_calibrator.joblib'}")
+    print(f"- {models_dir / 'isotonic_calibrator.joblib'}")
+    print(f"- {models_dir / 'beta_calibrator.joblib'}")
     print(f"- {models_dir / 'haar_gridsearch_best_calibrator.joblib'}")
 
 

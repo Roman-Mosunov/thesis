@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 from sklearn.base import BaseEstimator, ClassifierMixin
+from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
 from sklearn.utils.multiclass import type_of_target
 from sklearn.utils.validation import check_array, check_is_fitted
@@ -71,6 +72,169 @@ class SplineBinaryCalibrator(ClassifierMixin, BaseEstimator):
 
         basis = self._transformer.transform(probs.reshape(-1, 1))
         positive = self._model.predict_proba(basis)[:, 1]
+        negative = 1.0 - positive
+        return np.column_stack((negative, positive))
+
+    def predict(
+        self,
+        x: NDArray[np.float64] | NDArray[np.int64],
+    ) -> NDArray[np.float64]:
+        proba = self.predict_proba(x)
+        idx = np.argmax(proba, axis=1)
+        return self.classes_[idx]
+
+
+class PlattBinaryCalibrator(ClassifierMixin, BaseEstimator):
+    """Binary calibrator using Platt scaling (logistic regression on scores)."""
+
+    def __init__(
+        self,
+        *,
+        c: float = 1.0,
+        max_iter: int = 500,
+    ) -> None:
+        self.c = c
+        self.max_iter = max_iter
+
+    def fit(
+        self,
+        x: NDArray[np.float64] | NDArray[np.int64],
+        y: NDArray[np.float64] | NDArray[np.int64],
+    ) -> PlattBinaryCalibrator:
+        x_checked = check_array(x, ensure_2d=False)
+        y_arr = np.asarray(y)
+
+        if type_of_target(y_arr) != "binary":
+            raise ValueError("PlattBinaryCalibrator only supports binary targets.")
+
+        probs = as_probability_vector(x_checked)
+        model = LogisticRegression(C=self.c, solver="lbfgs", max_iter=self.max_iter)
+        model.fit(probs.reshape(-1, 1), y_arr)
+
+        self._model = model
+        self.classes_ = model.classes_
+        self.n_features_in_ = 1
+        return self
+
+    def predict_proba(
+        self,
+        x: NDArray[np.float64] | NDArray[np.int64],
+    ) -> NDArray[np.float64]:
+        check_is_fitted(self, ["_model", "classes_"])
+        x_checked = check_array(x, ensure_2d=False)
+        probs = as_probability_vector(x_checked)
+
+        positive = self._model.predict_proba(probs.reshape(-1, 1))[:, 1]
+        negative = 1.0 - positive
+        return np.column_stack((negative, positive))
+
+    def predict(
+        self,
+        x: NDArray[np.float64] | NDArray[np.int64],
+    ) -> NDArray[np.float64]:
+        proba = self.predict_proba(x)
+        idx = np.argmax(proba, axis=1)
+        return self.classes_[idx]
+
+
+class IsotonicBinaryCalibrator(ClassifierMixin, BaseEstimator):
+    """Binary calibrator using isotonic regression on scores."""
+
+    def __init__(self, *, out_of_bounds: str = "clip") -> None:
+        self.out_of_bounds = out_of_bounds
+
+    def fit(
+        self,
+        x: NDArray[np.float64] | NDArray[np.int64],
+        y: NDArray[np.float64] | NDArray[np.int64],
+    ) -> IsotonicBinaryCalibrator:
+        x_checked = check_array(x, ensure_2d=False)
+        y_arr = np.asarray(y)
+
+        if type_of_target(y_arr) != "binary":
+            raise ValueError("IsotonicBinaryCalibrator only supports binary targets.")
+
+        classes = np.unique(y_arr)
+        y_binary = (y_arr == classes[1]).astype(float)
+        probs = as_probability_vector(x_checked)
+
+        model = IsotonicRegression(
+            y_min=0.0,
+            y_max=1.0,
+            out_of_bounds=self.out_of_bounds,
+        )
+        model.fit(probs, y_binary)
+
+        self._model = model
+        self.classes_ = classes
+        self.n_features_in_ = 1
+        return self
+
+    def predict_proba(
+        self,
+        x: NDArray[np.float64] | NDArray[np.int64],
+    ) -> NDArray[np.float64]:
+        check_is_fitted(self, ["_model", "classes_"])
+        x_checked = check_array(x, ensure_2d=False)
+        probs = as_probability_vector(x_checked)
+
+        positive = np.asarray(self._model.predict(probs), dtype=float)
+        negative = 1.0 - positive
+        return np.column_stack((negative, positive))
+
+    def predict(
+        self,
+        x: NDArray[np.float64] | NDArray[np.int64],
+    ) -> NDArray[np.float64]:
+        proba = self.predict_proba(x)
+        idx = np.argmax(proba, axis=1)
+        return self.classes_[idx]
+
+
+class BetaBinaryCalibrator(ClassifierMixin, BaseEstimator):
+    """Binary beta calibrator using log-score features."""
+
+    def __init__(
+        self,
+        *,
+        c: float = 1.0,
+        max_iter: int = 500,
+    ) -> None:
+        self.c = c
+        self.max_iter = max_iter
+
+    def fit(
+        self,
+        x: NDArray[np.float64] | NDArray[np.int64],
+        y: NDArray[np.float64] | NDArray[np.int64],
+    ) -> BetaBinaryCalibrator:
+        x_checked = check_array(x, ensure_2d=False)
+        y_arr = np.asarray(y)
+
+        if type_of_target(y_arr) != "binary":
+            raise ValueError("BetaBinaryCalibrator only supports binary targets.")
+
+        probs = as_probability_vector(x_checked)
+        features = np.column_stack((np.log(probs), np.log1p(-probs)))
+
+        model = LogisticRegression(C=self.c, solver="lbfgs", max_iter=self.max_iter)
+        model.fit(features, y_arr)
+
+        self._model = model
+        self.classes_ = model.classes_
+        self.n_features_in_ = 1
+        return self
+
+    def predict_proba(
+        self,
+        x: NDArray[np.float64] | NDArray[np.int64],
+    ) -> NDArray[np.float64]:
+        check_is_fitted(self, ["_model", "classes_"])
+        x_checked = check_array(x, ensure_2d=False)
+        probs = as_probability_vector(x_checked)
+        features = np.column_stack((np.log(probs), np.log1p(-probs)))
+
+        positive = self._model.predict_proba(features)[:, 1]
         negative = 1.0 - positive
         return np.column_stack((negative, positive))
 

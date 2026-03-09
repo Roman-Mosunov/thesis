@@ -1,5 +1,11 @@
 from ._version import __version__
-from .calibrators import HaarMonotoneRidgeCalibrator, SplineBinaryCalibrator
+from .calibrators import (
+    BetaBinaryCalibrator,
+    HaarMonotoneRidgeCalibrator,
+    IsotonicBinaryCalibrator,
+    PlattBinaryCalibrator,
+    SplineBinaryCalibrator,
+)
 from .haar import (
     build_basis,
     check_monotone,
@@ -17,7 +23,10 @@ from .metrics import (
 from .plotting import plot_reliability_diagram, reliability_points, save_reliability_diagram
 
 __all__ = [
+    "BetaBinaryCalibrator",
     "HaarMonotoneRidgeCalibrator",
+    "IsotonicBinaryCalibrator",
+    "PlattBinaryCalibrator",
     "SplineBinaryCalibrator",
     "build_basis",
     "brier_calibration_refinement_loss",

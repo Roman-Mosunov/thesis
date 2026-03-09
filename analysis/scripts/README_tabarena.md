@@ -1,9 +1,11 @@
 # TabArena Calibration Workflow
 
 This runbook provides a reproducible workflow for OpenML/TabArena experiments with:
-- base model (uncalibrated),
+- uncalibrated logistic model,
 - spline calibrator,
-- Haar calibrator (fixed),
+- Platt calibrator,
+- isotonic calibrator,
+- beta calibrator,
 - Haar calibrator (grid-search best).
 
 It keeps the previous reliability outputs and adds explicit comparison plots for:
@@ -46,7 +48,7 @@ uv run python analysis/scripts/run_tabarena_haar_experiment.py \
 ## What each run executes
 
 1. Train base classifier and create calibration/test splits.
-2. Run subset-stage comparisons (base, spline, Haar fixed).
+2. Run subset-stage comparisons (uncalibrated logistic, spline, Platt, isotonic, beta).
 3. Run Haar two-stage `GridSearchCV` on calibration data:
    - Stage 1: broad logspace over `10^-6` to `10^0` to identify the best decade.
    - Stage 2: dense logspace within the selected decade.
@@ -67,9 +69,12 @@ uv run python analysis/scripts/run_tabarena_haar_experiment.py \
   - `--spline-c`
   - `--spline-max-iter`
   - `--spline-include-bias`
-- Haar fixed:
-  - `--fixed-j-max`
-  - `--fixed-lam`
+- Platt calibrator:
+  - `--platt-c`
+  - `--platt-max-iter`
+- Beta calibrator:
+  - `--beta-c`
+  - `--beta-max-iter`
 - Haar two-stage grid search:
   - `--grid-j-min` (default `1`)
   - `--grid-j-max` (default `6`)
@@ -90,7 +95,7 @@ Run directory pattern:
 `analysis/outputs/tabarena/<dataset-slug>/<UTC-run-id>/`
 
 Saved tables:
-- `subset_fixed_results.csv`
+- `subset_results.csv`
 - `lambda_stage1_gridsearch_cv_results.csv`
 - `lambda_stage2_gridsearch_cv_results.csv`
 - `interval_scan_results.csv` (backward-compatible alias of stage-1 grid results)
@@ -98,19 +103,26 @@ Saved tables:
 - `final_test_metrics.csv`
 - `predictions_test.csv`
 - `estimator_curves.csv`
+- `graph_summary_reliability.csv`
+- `graph_summary_estimator_mapping.csv`
+- `graph_summaries.md`
 - `recommended_ranges.json`
 - `run_metadata.json`
 
 Saved models:
 - `models/base_model.joblib`
 - `models/spline_fixed_calibrator.joblib`
-- `models/haar_fixed_calibrator.joblib`
+- `models/platt_calibrator.joblib`
+- `models/isotonic_calibrator.joblib`
+- `models/beta_calibrator.joblib`
 - `models/haar_gridsearch_best_calibrator.joblib`
 
-Saved plots (old ones retained + new comparisons):
-- `plots/reliability_base.png`
+Saved plots:
+- `plots/reliability_uncalibrated_logistic.png`
 - `plots/reliability_spline_fixed.png`
-- `plots/reliability_haar_fixed.png`
+- `plots/reliability_platt.png`
+- `plots/reliability_isotonic.png`
+- `plots/reliability_beta.png`
 - `plots/reliability_haar_gridsearch_best.png`
 - `plots/reliability_all_estimators_comparison.png`
 - `plots/reliability_all_estimators_panel.png`
@@ -128,7 +140,7 @@ Saved plots (old ones retained + new comparisons):
 Stored outputs include:
 - dataset identifiers (`dataset_id`, `task_id`),
 - core metrics (`brier_score`, `ece`, `log_loss`),
-- estimator hyperparameters (spline + Haar),
+- estimator hyperparameters (spline, Platt, beta + Haar),
 - reproducibility metadata (python, package versions, git commit/dirty).
 
 References:
