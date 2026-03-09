@@ -48,8 +48,10 @@ from sklearn.preprocessing import OneHotEncoder
 from splinecal import (
     HaarMonotoneRidgeCalibrator,
     SplineBinaryCalibrator,
+    brier_calibration_refinement_loss,
     brier_score,
     expected_calibration_error,
+    log_loss_calibration_refinement_loss,
     reliability_points,
     save_reliability_diagram,
 )
@@ -268,6 +270,16 @@ def _metrics_row(
     subset_fraction: float | None = None,
 ) -> dict[str, Any]:
     probs = np.asarray(y_prob, dtype=float).ravel()
+    brier_calibration_loss, brier_refinement_loss = brier_calibration_refinement_loss(
+        y_true,
+        probs,
+        n_bins=ece_bins,
+    )
+    calibration_loss, refinement_loss = log_loss_calibration_refinement_loss(
+        y_true,
+        probs,
+        n_bins=ece_bins,
+    )
     return {
         "method": method,
         "phase": phase,
@@ -278,6 +290,10 @@ def _metrics_row(
         "n_samples": int(y_true.shape[0]),
         "positive_rate": float(np.mean(y_true)),
         "brier_score": brier_score(y_true, probs),
+        "brier_calibration_loss": brier_calibration_loss,
+        "brier_refinement_loss": brier_refinement_loss,
+        "calibration_loss": calibration_loss,
+        "refinement_loss": refinement_loss,
         "ece": expected_calibration_error(y_true, probs, n_bins=ece_bins),
         "log_loss": float(log_loss(y_true, np.clip(probs, 1e-15, 1.0 - 1e-15))),
     }
