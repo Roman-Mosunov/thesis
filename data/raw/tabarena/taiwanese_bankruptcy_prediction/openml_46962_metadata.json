@@ -1,0 +1,13 @@
+{
+  "dataset_name": "taiwanese_bankruptcy_prediction",
+  "dataset_id": 46962,
+  "target_column": "Bankrupt",
+  "n_rows": 6819,
+  "n_features": 94,
+  "n_classes": 2,
+  "class_counts_raw": {
+    "No": 6599,
+    "Yes": 220
+  },
+  "persisted_at_utc": "2026-03-11T18:34:30.795992+00:00"
+}

@@ -57,6 +57,10 @@ from splinecal import (
     reliability_points,
     save_reliability_diagram,
 )
+from tabarena_dataset_presets import (
+    format_dataset_presets_table,
+    resolve_dataset_preset,
+)
 
 
 @dataclass(frozen=True)
@@ -1060,6 +1064,17 @@ def _save_graph_summaries(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run persistent TabArena calibration experiments.")
+    parser.add_argument(
+        "--dataset-preset",
+        type=str,
+        default=None,
+        help="Dataset preset key (e.g. taiwanese-bankruptcy-prediction).",
+    )
+    parser.add_argument(
+        "--list-dataset-presets",
+        action="store_true",
+        help="Print available dataset presets and exit.",
+    )
     parser.add_argument("--dataset-name", type=str, default="blood-transfusion-service-center")
     parser.add_argument("--dataset-id", type=int, default=46913)
     parser.add_argument("--task-id", type=int, default=363621)
@@ -1097,6 +1112,20 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if args.list_dataset_presets:
+        print(format_dataset_presets_table())
+        return
+
+    selected_dataset_preset: str | None = None
+    if args.dataset_preset:
+        preset = resolve_dataset_preset(args.dataset_preset)
+        selected_dataset_preset = preset.key
+        args.dataset_name = preset.dataset_name
+        args.dataset_id = preset.dataset_id
+        args.task_id = preset.task_id
+        if args.positive_label is None:
+            args.positive_label = preset.positive_label
+
     started_at = _utc_now_iso()
 
     if args.grid_j_min < 1:
@@ -1441,6 +1470,7 @@ def main() -> None:
         "started_at_utc": started_at,
         "finished_at_utc": finished_at,
         "dataset": {
+            "dataset_preset": selected_dataset_preset,
             "dataset_name": args.dataset_name,
             "dataset_id": args.dataset_id,
             "task_id": args.task_id,

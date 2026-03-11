@@ -1,0 +1,13 @@
+{
+  "dataset_name": "coil2000_insurance_policies",
+  "dataset_id": 46916,
+  "target_column": "MobileHomePolicy",
+  "n_rows": 9822,
+  "n_features": 85,
+  "n_classes": 2,
+  "class_counts_raw": {
+    "No": 9236,
+    "Yes": 586
+  },
+  "persisted_at_utc": "2026-03-11T18:52:25.332223+00:00"
+}
