@@ -53,7 +53,8 @@ uv run python analysis/scripts/run_tabarena_haar_experiment.py \
    - Stage 1: broad logspace over `10^-6` to `10^0` to identify the best decade.
    - Stage 2: dense logspace within the selected decade.
 4. Evaluate all estimators on test split.
-5. Save per-estimator reliability diagrams and global comparison plots.
+5. Run cross-validated train/test evaluation of calibration fitting (`--cv-folds`, default 5).
+6. Save per-estimator reliability diagrams and global comparison plots.
 
 ## Main adjustable parameters
 
@@ -100,6 +101,7 @@ Saved tables:
 - `lambda_stage2_gridsearch_cv_results.csv`
 - `interval_scan_results.csv` (backward-compatible alias of stage-1 grid results)
 - `gridsearch_cv_results.csv` (backward-compatible alias of stage-2 grid results)
+- `cross_validated_train_test_metrics.csv`
 - `final_test_metrics.csv`
 - `predictions_test.csv`
 - `estimator_curves.csv`

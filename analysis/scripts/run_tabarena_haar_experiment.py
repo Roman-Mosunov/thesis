@@ -73,6 +73,29 @@ NDArrayFloat = np.ndarray
 NDArrayInt = np.ndarray
 
 
+METRIC_COLUMNS_ORDER = [
+    "method",
+    "phase",
+    "cv_fold",
+    "subset_fraction",
+    "j_max",
+    "lam",
+    "spline_n_knots",
+    "train_samples",
+    "calibration_samples",
+    "test_samples",
+    "n_samples",
+    "positive_rate",
+    "brier_score",
+    "brier_calibration_loss",
+    "brier_refinement_loss",
+    "ece",
+    "log_loss",
+    "calibration_loss",
+    "refinement_loss",
+]
+
+
 def _slugify(text: str) -> str:
     return text.strip().lower().replace(" ", "-").replace("/", "-")
 
@@ -301,6 +324,12 @@ def _metrics_row(
     }
 
 
+def _reorder_metric_columns(df: pd.DataFrame) -> pd.DataFrame:
+    ordered_existing = [col for col in METRIC_COLUMNS_ORDER if col in df.columns]
+    remaining = [col for col in df.columns if col not in ordered_existing]
+    return df.loc[:, ordered_existing + remaining]
+
+
 def _fit_spline(
     scores_cal: NDArrayFloat,
     y_cal: NDArrayInt,
@@ -495,6 +524,148 @@ def _run_subset_stage(
             )
         )
     return pd.DataFrame(rows)
+
+
+def _run_cross_validated_train_test_stage(
+    *,
+    x: pd.DataFrame,
+    y: NDArrayInt,
+    cv_folds: int,
+    random_state: int,
+    spline_n_knots: int,
+    spline_degree: int,
+    spline_include_bias: bool,
+    spline_c: float,
+    spline_max_iter: int,
+    platt_c: float,
+    platt_max_iter: int,
+    beta_c: float,
+    beta_max_iter: int,
+    haar_j_max: int,
+    haar_lam: float,
+    ece_bins: int,
+) -> pd.DataFrame:
+    if cv_folds < 2:
+        raise ValueError("cv_folds must be >= 2 for cross-validated train/test metrics.")
+
+    outer_cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
+    rows: list[dict[str, Any]] = []
+
+    for fold_idx, (train_idx, test_idx) in enumerate(outer_cv.split(x, y), start=1):
+        x_train_full = x.iloc[train_idx].reset_index(drop=True)
+        y_train_full = np.asarray(y[train_idx], dtype=int)
+        x_test = x.iloc[test_idx].reset_index(drop=True)
+        y_test = np.asarray(y[test_idx], dtype=int)
+
+        x_train, x_cal, y_train, y_cal = train_test_split(
+            x_train_full,
+            y_train_full,
+            test_size=0.25,
+            stratify=y_train_full,
+            random_state=random_state + fold_idx,
+        )
+
+        x_train = x_train.reset_index(drop=True)
+        x_cal = x_cal.reset_index(drop=True)
+        y_train = np.asarray(y_train, dtype=int)
+        y_cal = np.asarray(y_cal, dtype=int)
+
+        base_model = _build_base_model(x, random_state=random_state + fold_idx)
+        base_model.fit(x_train, y_train)
+
+        p_cal = base_model.predict_proba(x_cal)[:, 1]
+        p_test = base_model.predict_proba(x_test)[:, 1]
+
+        p_spline = _fit_spline(
+            p_cal,
+            y_cal,
+            p_test,
+            n_knots=spline_n_knots,
+            degree=spline_degree,
+            include_bias=spline_include_bias,
+            c=spline_c,
+            max_iter=spline_max_iter,
+        )
+        p_platt = _fit_platt(
+            p_cal,
+            y_cal,
+            p_test,
+            c=platt_c,
+            max_iter=platt_max_iter,
+        )
+        p_isotonic = _fit_isotonic(p_cal, y_cal, p_test)
+        p_beta = _fit_beta(
+            p_cal,
+            y_cal,
+            p_test,
+            c=beta_c,
+            max_iter=beta_max_iter,
+        )
+
+        haar_calibrator = HaarMonotoneRidgeCalibrator(
+            j_max=haar_j_max,
+            lam=haar_lam,
+            use_haar_norm=True,
+            clip_probs=True,
+        )
+        haar_calibrator.fit(p_cal.reshape(-1, 1), y_cal)
+        p_haar = haar_calibrator.predict_proba(p_test.reshape(-1, 1))[:, 1]
+
+        fold_rows = [
+            _metrics_row(
+                method="uncalibrated_logistic",
+                phase="cross_validated_test",
+                y_true=y_test,
+                y_prob=p_test,
+                ece_bins=ece_bins,
+            ),
+            _metrics_row(
+                method="spline_fixed",
+                phase="cross_validated_test",
+                y_true=y_test,
+                y_prob=p_spline,
+                ece_bins=ece_bins,
+                spline_n_knots=spline_n_knots,
+            ),
+            _metrics_row(
+                method="platt",
+                phase="cross_validated_test",
+                y_true=y_test,
+                y_prob=p_platt,
+                ece_bins=ece_bins,
+            ),
+            _metrics_row(
+                method="isotonic",
+                phase="cross_validated_test",
+                y_true=y_test,
+                y_prob=p_isotonic,
+                ece_bins=ece_bins,
+            ),
+            _metrics_row(
+                method="beta",
+                phase="cross_validated_test",
+                y_true=y_test,
+                y_prob=p_beta,
+                ece_bins=ece_bins,
+            ),
+            _metrics_row(
+                method="haar_gridsearch_best",
+                phase="cross_validated_test",
+                y_true=y_test,
+                y_prob=p_haar,
+                ece_bins=ece_bins,
+                j_max=haar_j_max,
+                lam=haar_lam,
+            ),
+        ]
+        for row in fold_rows:
+            row["cv_fold"] = fold_idx
+            row["train_samples"] = int(y_train.shape[0])
+            row["calibration_samples"] = int(y_cal.shape[0])
+            row["test_samples"] = int(y_test.shape[0])
+        rows.extend(fold_rows)
+
+    return _reorder_metric_columns(pd.DataFrame(rows))
 
 
 def _select_lambda_decade(
@@ -983,6 +1154,7 @@ def main() -> None:
         ece_bins=args.ece_bins,
         random_state=args.random_state,
     )
+    subset_df = _reorder_metric_columns(subset_df)
     subset_df.to_csv(run_dir / "subset_results.csv", index=False)
 
     spline_calibrator = SplineBinaryCalibrator(
@@ -1080,6 +1252,25 @@ def main() -> None:
 
     best_calibrator = grid.best_estimator_
     p_grid_best = best_calibrator.predict_proba(p_test.reshape(-1, 1))[:, 1]
+    cv_train_test_df = _run_cross_validated_train_test_stage(
+        x=x,
+        y=y,
+        cv_folds=args.cv_folds,
+        random_state=args.random_state,
+        spline_n_knots=args.spline_n_knots,
+        spline_degree=args.spline_degree,
+        spline_include_bias=args.spline_include_bias,
+        spline_c=args.spline_c,
+        spline_max_iter=args.spline_max_iter,
+        platt_c=args.platt_c,
+        platt_max_iter=args.platt_max_iter,
+        beta_c=args.beta_c,
+        beta_max_iter=args.beta_max_iter,
+        haar_j_max=int(grid.best_params_["j_max"]),
+        haar_lam=float(grid.best_params_["lam"]),
+        ece_bins=args.ece_bins,
+    )
+    cv_train_test_df.to_csv(run_dir / "cross_validated_train_test_metrics.csv", index=False)
 
     final_rows = [
         _metrics_row(
@@ -1128,7 +1319,7 @@ def main() -> None:
             lam=float(grid.best_params_["lam"]),
         ),
     ]
-    final_df = pd.DataFrame(final_rows)
+    final_df = _reorder_metric_columns(pd.DataFrame(final_rows))
     final_df.to_csv(run_dir / "final_test_metrics.csv", index=False)
 
     _save_predictions_table(
@@ -1281,6 +1472,7 @@ def main() -> None:
             "lambda_stage1_points": args.lambda_stage1_points,
             "lambda_stage2_points": args.lambda_stage2_points,
             "grid_cv_folds": args.cv_folds,
+            "cross_validated_train_test_folds": args.cv_folds,
             "ece_bins": args.ece_bins,
             "plot_bins": args.plot_bins,
             "estimator_grid_points": args.estimator_grid_points,
@@ -1312,6 +1504,7 @@ def main() -> None:
     print(f"- {run_dir / 'lambda_stage2_gridsearch_cv_results.csv'}")
     print(f"- {run_dir / 'interval_scan_results.csv'}")
     print(f"- {run_dir / 'gridsearch_cv_results.csv'}")
+    print(f"- {run_dir / 'cross_validated_train_test_metrics.csv'}")
     print(f"- {run_dir / 'final_test_metrics.csv'}")
     print(f"- {run_dir / 'predictions_test.csv'}")
     print(f"- {run_dir / 'estimator_curves.csv'}")
