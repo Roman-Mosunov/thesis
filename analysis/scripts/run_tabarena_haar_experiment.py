@@ -21,6 +21,7 @@ import json
 import platform
 import subprocess
 import sys
+import warnings
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
@@ -33,6 +34,7 @@ import pandas as pd
 from joblib import dump
 from sklearn.compose import ColumnTransformer
 from sklearn.datasets import fetch_openml
+from sklearn.exceptions import ConvergenceWarning, FitFailedWarning
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import log_loss
@@ -43,7 +45,7 @@ from sklearn.model_selection import (
     train_test_split,
 )
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import MinMaxScaler, OneHotEncoder, RobustScaler, StandardScaler
 from splinecal import (
     BetaBinaryCalibrator,
     HaarMonotoneRidgeCalibrator,
@@ -116,6 +118,31 @@ def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _is_openml_checksum_error(exc: Exception) -> bool:
+    return isinstance(exc, ValueError) and "md5 checksum of local file" in str(exc)
+
+
+def _fetch_openml_dataset(*, dataset_id: int, refresh: bool):
+    fetch_kwargs = {
+        "data_id": dataset_id,
+        "as_frame": True,
+        "parser": "auto",
+        # Refresh should bypass sklearn's OpenML cache and checksum recovery path.
+        "cache": not refresh,
+    }
+    try:
+        return fetch_openml(**fetch_kwargs)
+    except Exception as exc:
+        if refresh or not _is_openml_checksum_error(exc):
+            raise
+        warnings.warn(
+            f"OpenML cache checksum mismatch for dataset_id={dataset_id}; "
+            "retrying without cache.",
+            RuntimeWarning,
+        )
+        return fetch_openml(**{**fetch_kwargs, "cache": False})
+
+
 def _git_metadata(repo_root: Path) -> dict[str, Any]:
     commit = "unknown"
     dirty = None
@@ -164,7 +191,7 @@ def _fetch_dataset(
         y = df[target_col]
         return x, y, metadata, csv_path
 
-    bunch = fetch_openml(data_id=dataset_id, as_frame=True, parser="auto")
+    bunch = _fetch_openml_dataset(dataset_id=dataset_id, refresh=refresh)
     x = bunch.data.copy()
     y = bunch.target.copy()
     target_col = y.name or "target"
@@ -220,27 +247,52 @@ def _binary_encode_target(
     return y_bin, mapping
 
 
-def _build_base_model(x: pd.DataFrame, random_state: int) -> Pipeline:
+def _build_base_model(
+    x: pd.DataFrame,
+    random_state: int,
+    *,
+    numeric_scaler: str = "standard",
+    onehot_min_frequency: int | None = None,
+    logreg_solver: str = "auto",
+    logreg_max_iter: int = 5000,
+) -> Pipeline:
     num_cols = x.select_dtypes(include=[np.number]).columns.tolist()
     cat_cols = [col for col in x.columns if col not in num_cols]
+
+    num_steps: list[tuple[str, Any]] = [("imputer", SimpleImputer(strategy="median"))]
+    if numeric_scaler == "standard":
+        num_steps.append(("scaler", StandardScaler()))
+    elif numeric_scaler == "robust":
+        num_steps.append(("scaler", RobustScaler()))
+    elif numeric_scaler == "minmax":
+        num_steps.append(("scaler", MinMaxScaler()))
+    elif numeric_scaler == "none":
+        pass
+    else:
+        raise ValueError(
+            "numeric_scaler must be one of {'standard', 'robust', 'minmax', 'none'}."
+        )
 
     transformers: list[tuple[str, Pipeline, list[str]]] = []
     if num_cols:
         transformers.append(
             (
                 "num",
-                Pipeline([("imputer", SimpleImputer(strategy="median"))]),
+                Pipeline(num_steps),
                 num_cols,
             )
         )
     if cat_cols:
+        onehot_kwargs: dict[str, Any] = {"handle_unknown": "ignore"}
+        if onehot_min_frequency is not None:
+            onehot_kwargs["min_frequency"] = onehot_min_frequency
         transformers.append(
             (
                 "cat",
                 Pipeline(
                     [
                         ("imputer", SimpleImputer(strategy="most_frequent")),
-                        ("onehot", OneHotEncoder(handle_unknown="ignore")),
+                        ("onehot", OneHotEncoder(**onehot_kwargs)),
                     ]
                 ),
                 cat_cols,
@@ -248,8 +300,10 @@ def _build_base_model(x: pd.DataFrame, random_state: int) -> Pipeline:
         )
 
     preprocessor = ColumnTransformer(transformers=transformers, remainder="drop")
+    resolved_solver = "saga" if logreg_solver == "auto" else logreg_solver
     classifier = LogisticRegression(
-        max_iter=1000,
+        solver=resolved_solver,
+        max_iter=logreg_max_iter,
         class_weight="balanced",
         random_state=random_state,
     )
@@ -334,6 +388,20 @@ def _reorder_metric_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df.loc[:, ordered_existing + remaining]
 
 
+def _fit_with_optional_convergence_suppression(
+    estimator: Any,
+    x: NDArrayFloat | pd.DataFrame,
+    y: NDArrayInt,
+    *,
+    suppress_convergence_warnings: bool,
+) -> Any:
+    if suppress_convergence_warnings:
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=ConvergenceWarning)
+            return estimator.fit(x, y)
+    return estimator.fit(x, y)
+
+
 def _fit_spline(
     scores_cal: NDArrayFloat,
     y_cal: NDArrayInt,
@@ -344,6 +412,7 @@ def _fit_spline(
     include_bias: bool,
     c: float,
     max_iter: int,
+    suppress_convergence_warnings: bool = False,
 ) -> NDArrayFloat:
     calibrator = SplineBinaryCalibrator(
         n_knots=n_knots,
@@ -352,7 +421,12 @@ def _fit_spline(
         c=c,
         max_iter=max_iter,
     )
-    calibrator.fit(scores_cal, y_cal)
+    _fit_with_optional_convergence_suppression(
+        calibrator,
+        scores_cal,
+        y_cal,
+        suppress_convergence_warnings=suppress_convergence_warnings,
+    )
     return calibrator.predict_proba(scores_eval)[:, 1]
 
 
@@ -363,9 +437,15 @@ def _fit_platt(
     *,
     c: float,
     max_iter: int,
+    suppress_convergence_warnings: bool = False,
 ) -> NDArrayFloat:
     calibrator = PlattBinaryCalibrator(c=c, max_iter=max_iter)
-    calibrator.fit(scores_cal, y_cal)
+    _fit_with_optional_convergence_suppression(
+        calibrator,
+        scores_cal,
+        y_cal,
+        suppress_convergence_warnings=suppress_convergence_warnings,
+    )
     return calibrator.predict_proba(scores_eval)[:, 1]
 
 
@@ -386,9 +466,15 @@ def _fit_beta(
     *,
     c: float,
     max_iter: int,
+    suppress_convergence_warnings: bool = False,
 ) -> NDArrayFloat:
     calibrator = BetaBinaryCalibrator(c=c, max_iter=max_iter)
-    calibrator.fit(scores_cal, y_cal)
+    _fit_with_optional_convergence_suppression(
+        calibrator,
+        scores_cal,
+        y_cal,
+        suppress_convergence_warnings=suppress_convergence_warnings,
+    )
     return calibrator.predict_proba(scores_eval)[:, 1]
 
 
@@ -431,6 +517,7 @@ def _run_subset_stage(
     beta_max_iter: int,
     ece_bins: int,
     random_state: int,
+    suppress_convergence_warnings: bool,
 ) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     for idx, frac in enumerate(subset_fracs):
@@ -463,6 +550,7 @@ def _run_subset_stage(
             include_bias=spline_include_bias,
             c=spline_c,
             max_iter=spline_max_iter,
+            suppress_convergence_warnings=suppress_convergence_warnings,
         )
         rows.append(
             _metrics_row(
@@ -482,6 +570,7 @@ def _run_subset_stage(
             p_test_sub,
             c=platt_c,
             max_iter=platt_max_iter,
+            suppress_convergence_warnings=suppress_convergence_warnings,
         )
         rows.append(
             _metrics_row(
@@ -516,6 +605,7 @@ def _run_subset_stage(
             p_test_sub,
             c=beta_c,
             max_iter=beta_max_iter,
+            suppress_convergence_warnings=suppress_convergence_warnings,
         )
         rows.append(
             _metrics_row(
@@ -548,6 +638,11 @@ def _run_cross_validated_train_test_stage(
     haar_j_max: int,
     haar_lam: float,
     ece_bins: int,
+    numeric_scaler: str,
+    onehot_min_frequency: int | None,
+    logreg_solver: str,
+    logreg_max_iter: int,
+    suppress_convergence_warnings: bool,
 ) -> pd.DataFrame:
     if cv_folds < 2:
         raise ValueError("cv_folds must be >= 2 for cross-validated train/test metrics.")
@@ -574,8 +669,20 @@ def _run_cross_validated_train_test_stage(
         y_train = np.asarray(y_train, dtype=int)
         y_cal = np.asarray(y_cal, dtype=int)
 
-        base_model = _build_base_model(x, random_state=random_state + fold_idx)
-        base_model.fit(x_train, y_train)
+        base_model = _build_base_model(
+            x=x,
+            random_state=random_state + fold_idx,
+            numeric_scaler=numeric_scaler,
+            onehot_min_frequency=onehot_min_frequency,
+            logreg_solver=logreg_solver,
+            logreg_max_iter=logreg_max_iter,
+        )
+        _fit_with_optional_convergence_suppression(
+            base_model,
+            x_train,
+            y_train,
+            suppress_convergence_warnings=suppress_convergence_warnings,
+        )
 
         p_cal = base_model.predict_proba(x_cal)[:, 1]
         p_test = base_model.predict_proba(x_test)[:, 1]
@@ -589,6 +696,7 @@ def _run_cross_validated_train_test_stage(
             include_bias=spline_include_bias,
             c=spline_c,
             max_iter=spline_max_iter,
+            suppress_convergence_warnings=suppress_convergence_warnings,
         )
         p_platt = _fit_platt(
             p_cal,
@@ -596,6 +704,7 @@ def _run_cross_validated_train_test_stage(
             p_test,
             c=platt_c,
             max_iter=platt_max_iter,
+            suppress_convergence_warnings=suppress_convergence_warnings,
         )
         p_isotonic = _fit_isotonic(p_cal, y_cal, p_test)
         p_beta = _fit_beta(
@@ -604,6 +713,7 @@ def _run_cross_validated_train_test_stage(
             p_test,
             c=beta_c,
             max_iter=beta_max_iter,
+            suppress_convergence_warnings=suppress_convergence_warnings,
         )
 
         haar_calibrator = HaarMonotoneRidgeCalibrator(
@@ -701,6 +811,7 @@ def _run_gridsearch(
     lam_candidates: list[float],
     cv_folds: int,
     random_state: int,
+    suppress_fitfailed_warnings: bool,
 ) -> GridSearchCV:
     estimator = HaarMonotoneRidgeCalibrator(use_haar_norm=True, clip_probs=True)
     param_grid = {"j_max": j_candidates, "lam": lam_candidates}
@@ -715,7 +826,22 @@ def _run_gridsearch(
         refit=True,
         return_train_score=True,
     )
-    grid.fit(scores_cal.reshape(-1, 1), y_cal)
+    if suppress_fitfailed_warnings:
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=FitFailedWarning)
+            warnings.filterwarnings(
+                "ignore",
+                category=UserWarning,
+                message="One or more of the test scores are non-finite.*",
+            )
+            warnings.filterwarnings(
+                "ignore",
+                category=UserWarning,
+                message="One or more of the train scores are non-finite.*",
+            )
+            grid.fit(scores_cal.reshape(-1, 1), y_cal)
+    else:
+        grid.fit(scores_cal.reshape(-1, 1), y_cal)
     return grid
 
 
@@ -1080,6 +1206,38 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--task-id", type=int, default=363621)
     parser.add_argument("--positive-label", type=str, default=None)
     parser.add_argument("--refresh-dataset", action="store_true")
+    parser.add_argument(
+        "--numeric-scaler",
+        type=str,
+        default="standard",
+        choices=["standard", "robust", "minmax", "none"],
+        help="Scaling applied to numeric features before logistic regression.",
+    )
+    parser.add_argument(
+        "--onehot-min-frequency",
+        type=int,
+        default=None,
+        help="Optional minimum category frequency for OneHotEncoder rare-category grouping.",
+    )
+    parser.add_argument(
+        "--logreg-solver",
+        type=str,
+        default="auto",
+        choices=["auto", "lbfgs", "liblinear", "newton-cg", "newton-cholesky", "sag", "saga"],
+    )
+    parser.add_argument("--logreg-max-iter", type=int, default=5000)
+    parser.add_argument(
+        "--suppress-fitfailed-warnings",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Hide expected GridSearchCV FitFailedWarnings from unstable parameter pairs.",
+    )
+    parser.add_argument(
+        "--suppress-convergence-warnings",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Hide sklearn ConvergenceWarning during estimator fitting.",
+    )
 
     parser.add_argument("--subset-fracs", type=str, default="0.1,0.25,0.5,0.75,1.0")
     parser.add_argument("--spline-n-knots", type=int, default=5)
@@ -1138,6 +1296,10 @@ def main() -> None:
         raise ValueError("--lambda-stage1-points must be >= 5.")
     if args.lambda_stage2_points < 5:
         raise ValueError("--lambda-stage2-points must be >= 5.")
+    if args.logreg_max_iter < 100:
+        raise ValueError("--logreg-max-iter must be >= 100.")
+    if args.onehot_min_frequency is not None and args.onehot_min_frequency < 2:
+        raise ValueError("--onehot-min-frequency must be >= 2 when provided.")
 
     repo_root = Path(__file__).resolve().parents[2]
     run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -1158,8 +1320,20 @@ def main() -> None:
     y, label_map = _binary_encode_target(y_raw, positive_label=args.positive_label)
 
     split = _split_data(x, y, random_state=args.random_state)
-    base_model = _build_base_model(x, random_state=args.random_state)
-    base_model.fit(split.x_train, split.y_train)
+    base_model = _build_base_model(
+        x=x,
+        random_state=args.random_state,
+        numeric_scaler=args.numeric_scaler,
+        onehot_min_frequency=args.onehot_min_frequency,
+        logreg_solver=args.logreg_solver,
+        logreg_max_iter=args.logreg_max_iter,
+    )
+    _fit_with_optional_convergence_suppression(
+        base_model,
+        split.x_train,
+        split.y_train,
+        suppress_convergence_warnings=args.suppress_convergence_warnings,
+    )
 
     p_cal = base_model.predict_proba(split.x_cal)[:, 1]
     p_test = base_model.predict_proba(split.x_test)[:, 1]
@@ -1182,6 +1356,7 @@ def main() -> None:
         beta_max_iter=args.beta_max_iter,
         ece_bins=args.ece_bins,
         random_state=args.random_state,
+        suppress_convergence_warnings=args.suppress_convergence_warnings,
     )
     subset_df = _reorder_metric_columns(subset_df)
     subset_df.to_csv(run_dir / "subset_results.csv", index=False)
@@ -1193,11 +1368,21 @@ def main() -> None:
         c=args.spline_c,
         max_iter=args.spline_max_iter,
     )
-    spline_calibrator.fit(p_cal, split.y_cal)
+    _fit_with_optional_convergence_suppression(
+        spline_calibrator,
+        p_cal,
+        split.y_cal,
+        suppress_convergence_warnings=args.suppress_convergence_warnings,
+    )
     p_spline_full = spline_calibrator.predict_proba(p_test)[:, 1]
 
     platt_calibrator = PlattBinaryCalibrator(c=args.platt_c, max_iter=args.platt_max_iter)
-    platt_calibrator.fit(p_cal, split.y_cal)
+    _fit_with_optional_convergence_suppression(
+        platt_calibrator,
+        p_cal,
+        split.y_cal,
+        suppress_convergence_warnings=args.suppress_convergence_warnings,
+    )
     p_platt_full = platt_calibrator.predict_proba(p_test)[:, 1]
 
     isotonic_calibrator = IsotonicBinaryCalibrator(out_of_bounds="clip")
@@ -1205,7 +1390,12 @@ def main() -> None:
     p_isotonic_full = isotonic_calibrator.predict_proba(p_test)[:, 1]
 
     beta_calibrator = BetaBinaryCalibrator(c=args.beta_c, max_iter=args.beta_max_iter)
-    beta_calibrator.fit(p_cal, split.y_cal)
+    _fit_with_optional_convergence_suppression(
+        beta_calibrator,
+        p_cal,
+        split.y_cal,
+        suppress_convergence_warnings=args.suppress_convergence_warnings,
+    )
     p_beta_full = beta_calibrator.predict_proba(p_test)[:, 1]
 
     j_candidates = list(range(args.grid_j_min, args.grid_j_max + 1))
@@ -1221,6 +1411,7 @@ def main() -> None:
         lam_candidates=lambda_stage1_candidates,
         cv_folds=args.cv_folds,
         random_state=args.random_state,
+        suppress_fitfailed_warnings=args.suppress_fitfailed_warnings,
     )
     stage1_results = _sorted_cv_results(grid_stage1)
     stage1_results.to_csv(run_dir / "lambda_stage1_gridsearch_cv_results.csv", index=False)
@@ -1245,6 +1436,7 @@ def main() -> None:
         lam_candidates=lambda_stage2_candidates,
         cv_folds=args.cv_folds,
         random_state=args.random_state,
+        suppress_fitfailed_warnings=args.suppress_fitfailed_warnings,
     )
     grid_results = _sorted_cv_results(grid)
     grid_results.to_csv(run_dir / "lambda_stage2_gridsearch_cv_results.csv", index=False)
@@ -1298,6 +1490,11 @@ def main() -> None:
         haar_j_max=int(grid.best_params_["j_max"]),
         haar_lam=float(grid.best_params_["lam"]),
         ece_bins=args.ece_bins,
+        numeric_scaler=args.numeric_scaler,
+        onehot_min_frequency=args.onehot_min_frequency,
+        logreg_solver=args.logreg_solver,
+        logreg_max_iter=args.logreg_max_iter,
+        suppress_convergence_warnings=args.suppress_convergence_warnings,
     )
     cv_train_test_df.to_csv(run_dir / "cross_validated_train_test_metrics.csv", index=False)
 
@@ -1485,6 +1682,12 @@ def main() -> None:
             "random_state": args.random_state,
         },
         "parameters": {
+            "numeric_scaler": args.numeric_scaler,
+            "onehot_min_frequency": args.onehot_min_frequency,
+            "logreg_solver": args.logreg_solver,
+            "logreg_max_iter": args.logreg_max_iter,
+            "suppress_fitfailed_warnings": args.suppress_fitfailed_warnings,
+            "suppress_convergence_warnings": args.suppress_convergence_warnings,
             "spline_n_knots": args.spline_n_knots,
             "spline_degree": args.spline_degree,
             "spline_include_bias": args.spline_include_bias,

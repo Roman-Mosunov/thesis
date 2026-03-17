@@ -1,0 +1,13 @@
+{
+  "dataset_name": "Amazon_employee_access",
+  "dataset_id": 46905,
+  "target_column": "ResourceApproved",
+  "n_rows": 32769,
+  "n_features": 9,
+  "n_classes": 2,
+  "class_counts_raw": {
+    "Yes": 30872,
+    "No": 1897
+  },
+  "persisted_at_utc": "2026-03-16T22:17:47.939979+00:00"
+}

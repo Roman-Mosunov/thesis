@@ -1,0 +1,13 @@
+{
+  "dataset_name": "APSFailure",
+  "dataset_id": 46908,
+  "target_column": "AirPressureSystemFailure",
+  "n_rows": 76000,
+  "n_features": 170,
+  "n_classes": 2,
+  "class_counts_raw": {
+    "neg": 74625,
+    "pos": 1375
+  },
+  "persisted_at_utc": "2026-03-17T14:30:44.985927+00:00"
+}

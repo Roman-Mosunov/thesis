@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import math
 import subprocess
 import sys
 from pathlib import Path
 
 from tabarena_dataset_presets import (
+    DATASET_PRESETS,
+    DEFAULT_TABARENA_METADATA_CSV,
     RECOMMENDED_SMALL_IMBALANCED_KEYS,
     format_dataset_presets_table,
+    load_binary_presets_from_metadata,
     parse_dataset_presets,
 )
 
@@ -35,9 +39,31 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
         help="Print available presets and exit.",
     )
     parser.add_argument(
+        "--all-binary",
+        action="store_true",
+        help="Run all TabArena datasets marked as binary in the metadata CSV.",
+    )
+    parser.add_argument(
+        "--tabarena-metadata-csv",
+        type=Path,
+        default=DEFAULT_TABARENA_METADATA_CSV,
+        help="Path to tabarena_dataset_metadata.csv used for --all-binary mode.",
+    )
+    parser.add_argument(
         "--continue-on-error",
         action="store_true",
         help="Continue remaining datasets if one run fails.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the selected dataset list and exit without running experiments.",
+    )
+    parser.add_argument(
+        "--max-datasets",
+        type=int,
+        default=None,
+        help="Optional cap on how many datasets from the selected list to run.",
     )
     return parser.parse_known_args()
 
@@ -48,10 +74,26 @@ def main() -> None:
         print(format_dataset_presets_table())
         return
 
-    if args.use_recommended_small_imbalanced:
+    if args.all_binary:
+        presets = load_binary_presets_from_metadata(metadata_csv_path=args.tabarena_metadata_csv)
+    elif args.use_recommended_small_imbalanced:
         presets = parse_dataset_presets(",".join(RECOMMENDED_SMALL_IMBALANCED_KEYS))
     else:
         presets = parse_dataset_presets(args.dataset_presets)
+
+    if args.max_datasets is not None:
+        if args.max_datasets < 1:
+            raise ValueError("--max-datasets must be >= 1 when provided.")
+        presets = presets[: args.max_datasets]
+
+    if args.dry_run:
+        print("Selected datasets:")
+        for idx, preset in enumerate(presets, start=1):
+            rate_text = (
+                "unknown" if math.isnan(preset.minority_rate) else f"{preset.minority_rate:.4f}"
+            )
+            print(f"{idx:02d}. {preset.key} (minority_rate={rate_text}, n={preset.n_samples})")
+        return
 
     script_path = Path(__file__).resolve().with_name("run_tabarena_haar_experiment.py")
     failures: list[tuple[str, int]] = []
@@ -59,13 +101,28 @@ def main() -> None:
         cmd = [
             sys.executable,
             str(script_path),
-            "--dataset-preset",
-            preset.key,
-            *passthrough,
         ]
+        if preset.key in DATASET_PRESETS:
+            cmd.extend(["--dataset-preset", preset.key])
+        cmd.extend(
+            [
+                "--dataset-name",
+                preset.dataset_name,
+                "--dataset-id",
+                str(preset.dataset_id),
+                "--task-id",
+                str(preset.task_id),
+                *passthrough,
+            ]
+        )
+        if preset.positive_label is not None:
+            cmd.extend(["--positive-label", preset.positive_label])
+        rate_text = (
+            "unknown" if math.isnan(preset.minority_rate) else f"{preset.minority_rate:.4f}"
+        )
         print(
             f"[{idx}/{len(presets)}] {preset.key} "
-            f"(minority_rate={preset.minority_rate:.4f}, n={preset.n_samples})"
+            f"(minority_rate={rate_text}, n={preset.n_samples})"
         )
         result = subprocess.run(cmd, check=False)
         if result.returncode != 0:

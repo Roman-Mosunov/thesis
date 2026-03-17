@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import csv
+import math
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -23,7 +26,7 @@ DATASET_PRESETS: dict[str, DatasetPreset] = {
         dataset_name="blood-transfusion-service-center",
         dataset_id=46913,
         task_id=363621,
-        positive_label="1",
+        positive_label="Yes",
         minority_rate=0.2400,
         n_samples=748,
         notes="Current default baseline dataset.",
@@ -116,6 +119,9 @@ RECOMMENDED_SMALL_IMBALANCED_KEYS: tuple[str, ...] = (
     "coil2000-insurance-policies",
     "polish-companies-bankruptcy",
 )
+DEFAULT_TABARENA_METADATA_CSV = (
+    Path(__file__).resolve().parent / "metadata" / "tabarena_dataset_metadata.csv"
+)
 
 
 def _normalize_key(key: str) -> str:
@@ -137,15 +143,61 @@ def parse_dataset_presets(raw: str) -> list[DatasetPreset]:
     return [resolve_dataset_preset(key) for key in keys]
 
 
+def load_binary_presets_from_metadata(
+    *,
+    metadata_csv_path: Path | str = DEFAULT_TABARENA_METADATA_CSV,
+) -> list[DatasetPreset]:
+    csv_path = Path(metadata_csv_path)
+    if not csv_path.exists():
+        raise FileNotFoundError(f"TabArena metadata CSV not found: {csv_path}")
+
+    presets: list[DatasetPreset] = []
+    with csv_path.open("r", encoding="utf-8", newline="") as handle:
+        for row in csv.DictReader(handle):
+            if row.get("problem_type") != "binary":
+                continue
+
+            dataset_name = row["dataset_name"]
+            normalized_key = _normalize_key(dataset_name)
+            existing = DATASET_PRESETS.get(normalized_key)
+
+            task_id = int(float(row["task_id"]))
+            dataset_id = int(float(row["dataset_id"]))
+            n_samples = int(float(row["num_instances"])) if row.get("num_instances") else 0
+            minority_rate = existing.minority_rate if existing else math.nan
+            positive_label = existing.positive_label if existing else None
+            notes = (
+                existing.notes
+                if existing
+                else "Loaded from TabArena metadata; positive class inferred automatically."
+            )
+
+            presets.append(
+                DatasetPreset(
+                    key=normalized_key,
+                    dataset_name=dataset_name,
+                    dataset_id=dataset_id,
+                    task_id=task_id,
+                    positive_label=positive_label,
+                    minority_rate=minority_rate,
+                    n_samples=n_samples,
+                    notes=notes,
+                )
+            )
+
+    return sorted(presets, key=lambda item: item.key)
+
+
 def format_dataset_presets_table() -> str:
     header = (
         "key,dataset_name,dataset_id,task_id,minority_rate,n_samples,positive_label,notes"
     )
     lines = [header]
     for preset in sorted(DATASET_PRESETS.values(), key=lambda item: item.minority_rate):
+        rate_text = "" if math.isnan(preset.minority_rate) else f"{preset.minority_rate:.4f}"
         lines.append(
             f"{preset.key},{preset.dataset_name},{preset.dataset_id},"
-            f"{preset.task_id},{preset.minority_rate:.4f},{preset.n_samples},"
+            f"{preset.task_id},{rate_text},{preset.n_samples},"
             f"{preset.positive_label or ''},{preset.notes}"
         )
     return "\n".join(lines)

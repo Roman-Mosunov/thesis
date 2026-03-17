@@ -1,0 +1,13 @@
+{
+  "dataset_name": "Diabetes130US",
+  "dataset_id": 46922,
+  "target_column": "EarlyReadmission",
+  "n_rows": 71518,
+  "n_features": 47,
+  "n_classes": 2,
+  "class_counts_raw": {
+    "No": 65225,
+    "Yes": 6293
+  },
+  "persisted_at_utc": "2026-03-16T20:26:05.182387+00:00"
+}

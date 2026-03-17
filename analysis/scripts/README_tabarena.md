@@ -70,11 +70,36 @@ uv run python analysis/scripts/run_tabarena_haar_batch.py \
   --use-recommended-small-imbalanced
 ```
 
+Run all TabArena binary datasets from metadata:
+
+```bash
+uv run python analysis/scripts/run_tabarena_haar_batch.py \
+  --all-binary
+```
+
+Inspect which datasets will run (without executing):
+
+```bash
+uv run python analysis/scripts/run_tabarena_haar_batch.py \
+  --all-binary --dry-run --max-datasets 10
+```
+
 Or pass your own dataset list:
 
 ```bash
 uv run python analysis/scripts/run_tabarena_haar_batch.py \
   --dataset-presets kddcup09-appetency,bank-marketing,credit-card-clients-default
+```
+
+Recommended convergence-friendly run settings (many datasets):
+
+```bash
+uv run python analysis/scripts/run_tabarena_haar_batch.py \
+  --all-binary \
+  --numeric-scaler robust \
+  --logreg-solver saga \
+  --logreg-max-iter 8000 \
+  --suppress-fitfailed-warnings
 ```
 
 Quick development run (faster, less exhaustive than thesis defaults):
@@ -107,6 +132,12 @@ uv run python analysis/scripts/run_tabarena_haar_experiment.py \
   - `--task-id`
   - `--positive-label`
   - `--refresh-dataset`
+  - `--numeric-scaler` (`standard|robust|minmax|none`)
+  - `--onehot-min-frequency`
+  - `--logreg-solver` (`auto|lbfgs|liblinear|newton-cg|newton-cholesky|sag|saga`)
+  - `--logreg-max-iter`
+  - `--suppress-fitfailed-warnings`
+  - `--suppress-convergence-warnings`
 - Spline calibrator:
   - `--spline-n-knots`
   - `--spline-degree`

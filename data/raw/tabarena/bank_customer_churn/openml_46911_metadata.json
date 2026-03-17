@@ -1,0 +1,13 @@
+{
+  "dataset_name": "Bank_Customer_Churn",
+  "dataset_id": 46911,
+  "target_column": "churn",
+  "n_rows": 10000,
+  "n_features": 10,
+  "n_classes": 2,
+  "class_counts_raw": {
+    "No": 7963,
+    "Yes": 2037
+  },
+  "persisted_at_utc": "2026-03-17T21:13:07.057216+00:00"
+}
