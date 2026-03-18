@@ -1,0 +1,13 @@
+{
+  "dataset_name": "kddcup09_appetency",
+  "dataset_id": 46939,
+  "target_column": "appetency",
+  "n_rows": 50000,
+  "n_features": 212,
+  "n_classes": 2,
+  "class_counts_raw": {
+    "-1": 49110,
+    "1": 890
+  },
+  "persisted_at_utc": "2026-03-18T14:33:59.836444+00:00"
+}

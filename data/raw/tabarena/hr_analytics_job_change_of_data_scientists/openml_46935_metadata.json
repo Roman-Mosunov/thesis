@@ -1,0 +1,13 @@
+{
+  "dataset_name": "HR_Analytics_Job_Change_of_Data_Scientists",
+  "dataset_id": 46935,
+  "target_column": "LookingForJobChange",
+  "n_rows": 19158,
+  "n_features": 12,
+  "n_classes": 2,
+  "class_counts_raw": {
+    "No": 14381,
+    "Yes": 4777
+  },
+  "persisted_at_utc": "2026-03-18T14:23:20.618968+00:00"
+}

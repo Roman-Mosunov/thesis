@@ -1,0 +1,13 @@
+{
+  "dataset_name": "credit_card_clients_default",
+  "dataset_id": 46919,
+  "target_column": "DefaultOnPaymentNextMonth",
+  "n_rows": 30000,
+  "n_features": 23,
+  "n_classes": 2,
+  "class_counts_raw": {
+    "No": 23364,
+    "Yes": 6636
+  },
+  "persisted_at_utc": "2026-03-17T22:49:13.985285+00:00"
+}

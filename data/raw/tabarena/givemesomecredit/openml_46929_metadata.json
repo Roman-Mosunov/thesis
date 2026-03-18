@@ -1,0 +1,13 @@
+{
+  "dataset_name": "GiveMeSomeCredit",
+  "dataset_id": 46929,
+  "target_column": "FinancialDistressNextTwoYears",
+  "n_rows": 150000,
+  "n_features": 10,
+  "n_classes": 2,
+  "class_counts_raw": {
+    "No": 139974,
+    "Yes": 10026
+  },
+  "persisted_at_utc": "2026-03-18T13:58:24.157044+00:00"
+}

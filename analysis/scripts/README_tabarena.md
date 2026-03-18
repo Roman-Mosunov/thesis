@@ -28,12 +28,6 @@ Strong small/medium options from TabArena curation metadata + OpenML class count
 - `coil2000-insurance-policies` (`dataset_id=46916`, `task_id=363624`, minority rate `5.97%`, `n=9822`)
 - `polish-companies-bankruptcy` (`dataset_id=46950`, `task_id=363694`, minority rate `6.94%`, `n=5910`)
 
-Your suggested datasets and observed minority rate:
-- `kddcup09-appetency`: `1.78%` (very imbalanced but larger, `n=50000`)
-- `Diabetes130US`: `8.80%` (`n=71518`)
-- `bank-marketing`: `11.70%` (`n=45211`)
-- `credit-card-clients-default`: `22.12%` (`n=30000`)
-- `heloc`: `47.81%` (close to balanced)
 
 ## Reproducible run steps
 

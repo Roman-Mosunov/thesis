@@ -65,6 +65,12 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
         default=None,
         help="Optional cap on how many datasets from the selected list to run.",
     )
+    parser.add_argument(
+        "--start-at",
+        type=str,
+        default=None,
+        help="Optional dataset key to resume from within the selected list.",
+    )
     return parser.parse_known_args()
 
 
@@ -80,6 +86,23 @@ def main() -> None:
         presets = parse_dataset_presets(",".join(RECOMMENDED_SMALL_IMBALANCED_KEYS))
     else:
         presets = parse_dataset_presets(args.dataset_presets)
+
+    if args.start_at is not None:
+        normalized_start = args.start_at.strip().lower().replace("_", "-")
+        start_idx = next(
+            (
+                idx
+                for idx, preset in enumerate(presets)
+                if preset.key.strip().lower().replace("_", "-") == normalized_start
+            ),
+            None,
+        )
+        if start_idx is None:
+            available = ", ".join(preset.key for preset in presets)
+            raise KeyError(
+                f"--start-at '{args.start_at}' is not in the selected dataset list: {available}"
+            )
+        presets = presets[start_idx:]
 
     if args.max_datasets is not None:
         if args.max_datasets < 1:

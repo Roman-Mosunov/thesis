@@ -1,0 +1,13 @@
+{
+  "dataset_name": "jm1",
+  "dataset_id": 46979,
+  "target_column": "defects",
+  "n_rows": 10885,
+  "n_features": 21,
+  "n_classes": 2,
+  "class_counts_raw": {
+    "False": 8779,
+    "True": 2106
+  },
+  "persisted_at_utc": "2026-03-18T14:30:07.370892+00:00"
+}

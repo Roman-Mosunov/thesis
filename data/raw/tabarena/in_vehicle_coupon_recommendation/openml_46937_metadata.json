@@ -1,0 +1,13 @@
+{
+  "dataset_name": "in_vehicle_coupon_recommendation",
+  "dataset_id": 46937,
+  "target_column": "AcceptCoupon",
+  "n_rows": 12684,
+  "n_features": 24,
+  "n_classes": 2,
+  "class_counts_raw": {
+    "Yes": 7210,
+    "No": 5474
+  },
+  "persisted_at_utc": "2026-03-18T14:26:19.086354+00:00"
+}

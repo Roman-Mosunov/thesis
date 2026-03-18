@@ -1,0 +1,13 @@
+{
+  "dataset_name": "heloc",
+  "dataset_id": 46932,
+  "target_column": "RiskPerformance",
+  "n_rows": 10459,
+  "n_features": 23,
+  "n_classes": 2,
+  "class_counts_raw": {
+    "Bad": 5459,
+    "Good": 5000
+  },
+  "persisted_at_utc": "2026-03-18T14:21:10.617970+00:00"
+}

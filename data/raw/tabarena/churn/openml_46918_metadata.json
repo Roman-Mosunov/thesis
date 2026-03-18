@@ -1,0 +1,13 @@
+{
+  "dataset_name": "churn",
+  "dataset_id": 46918,
+  "target_column": "good_or_bad_customer",
+  "n_rows": 1000,
+  "n_features": 20,
+  "n_classes": 2,
+  "class_counts_raw": {
+    "good": 700,
+    "bad": 300
+  },
+  "persisted_at_utc": "2026-03-18T13:09:48.136285+00:00"
+}

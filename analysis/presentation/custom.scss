@@ -1,0 +1,55 @@
+/*-- scss:defaults --*/
+$code-block-font-size: 0.8em;
+
+/*-- scss:rules --*/
+.reveal .slides {
+    height: 100%;
+    top: 0;
+    margin-top: 0;
+}
+
+.reveal .slides > section {
+    min-height: 90%;
+}
+
+.reveal .slides > section > section {
+    min-height: 100%;
+}
+
+.reveal .small-table table {
+    font-size: 0.62em;
+}
+
+.reveal .small-table,
+.reveal .tiny-table {
+    overflow-x: auto;
+}
+
+.reveal .tiny-table table {
+    font-size: 0.50em;
+}
+
+.reveal .slide-note {
+    font-size: 0.82em;
+    color: #555;
+}
+
+.reveal img {
+    max-width: 100%;
+    height: auto;
+}
+
+.reveal .math-slide p {
+    font-size: 0.95em;
+}
+
+.reveal .math-slide li {
+    font-size: 0.88em;
+}
+
+.reveal .math-slide .MathJax_Display,
+.reveal .math-slide mjx-container[display="true"] {
+    font-size: 0.82em !important;
+    overflow-x: auto;
+    overflow-y: hidden;
+}

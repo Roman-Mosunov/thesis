@@ -1,0 +1,13 @@
+{
+  "dataset_name": "seismic-bumps",
+  "dataset_id": 46956,
+  "target_column": "HighEnergySeismicBump",
+  "n_rows": 2584,
+  "n_features": 15,
+  "n_classes": 2,
+  "class_counts_raw": {
+    "No": 2414,
+    "Yes": 170
+  },
+  "persisted_at_utc": "2026-03-18T15:50:53.411132+00:00"
+}

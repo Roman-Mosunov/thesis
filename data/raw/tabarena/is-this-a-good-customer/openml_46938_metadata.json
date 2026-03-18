@@ -1,0 +1,13 @@
+{
+  "dataset_name": "Is-this-a-good-customer",
+  "dataset_id": 46938,
+  "target_column": "bad_client_target",
+  "n_rows": 1723,
+  "n_features": 13,
+  "n_classes": 2,
+  "class_counts_raw": {
+    "No": 1527,
+    "Yes": 196
+  },
+  "persisted_at_utc": "2026-03-18T14:28:21.298360+00:00"
+}

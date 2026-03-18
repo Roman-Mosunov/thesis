@@ -1,0 +1,13 @@
+{
+  "dataset_name": "Fitness_Club",
+  "dataset_id": 46927,
+  "target_column": "attended",
+  "n_rows": 1500,
+  "n_features": 6,
+  "n_classes": 2,
+  "class_counts_raw": {
+    "No": 1046,
+    "Yes": 454
+  },
+  "persisted_at_utc": "2026-03-18T13:57:32.463053+00:00"
+}

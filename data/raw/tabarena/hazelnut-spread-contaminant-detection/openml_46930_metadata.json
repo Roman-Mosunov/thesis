@@ -1,0 +1,13 @@
+{
+  "dataset_name": "hazelnut-spread-contaminant-detection",
+  "dataset_id": 46930,
+  "target_column": "Contaminated",
+  "n_rows": 2400,
+  "n_features": 30,
+  "n_classes": 2,
+  "class_counts_raw": {
+    "0": 1200,
+    "1": 1200
+  },
+  "persisted_at_utc": "2026-03-18T14:19:24.634054+00:00"
+}

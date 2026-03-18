@@ -1,0 +1,13 @@
+{
+  "dataset_name": "online_shoppers_intention",
+  "dataset_id": 46947,
+  "target_column": "Revenue",
+  "n_rows": 12330,
+  "n_features": 17,
+  "n_classes": 2,
+  "class_counts_raw": {
+    "False": 10422,
+    "True": 1908
+  },
+  "persisted_at_utc": "2026-03-18T15:47:11.459128+00:00"
+}

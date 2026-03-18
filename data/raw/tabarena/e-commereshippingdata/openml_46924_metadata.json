@@ -1,0 +1,13 @@
+{
+  "dataset_name": "E-CommereShippingData",
+  "dataset_id": 46924,
+  "target_column": "ArrivedLate",
+  "n_rows": 10999,
+  "n_features": 10,
+  "n_classes": 2,
+  "class_counts_raw": {
+    "Yes": 6563,
+    "No": 4436
+  },
+  "persisted_at_utc": "2026-03-18T13:56:22.609500+00:00"
+}

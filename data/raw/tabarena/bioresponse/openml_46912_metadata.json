@@ -1,0 +1,13 @@
+{
+  "dataset_name": "Bioresponse",
+  "dataset_id": 46912,
+  "target_column": "MoleculeElicitsResponse",
+  "n_rows": 3751,
+  "n_features": 1776,
+  "n_classes": 2,
+  "class_counts_raw": {
+    "Yes": 2034,
+    "No": 1717
+  },
+  "persisted_at_utc": "2026-03-17T22:24:16.865049+00:00"
+}

@@ -1,0 +1,13 @@
+{
+  "dataset_name": "churn",
+  "dataset_id": 46915,
+  "target_column": "CustomerChurned",
+  "n_rows": 5000,
+  "n_features": 19,
+  "n_classes": 2,
+  "class_counts_raw": {
+    "No": 4293,
+    "Yes": 707
+  },
+  "persisted_at_utc": "2026-03-17T22:43:19.849872+00:00"
+}

@@ -478,6 +478,100 @@ def _fit_beta(
     return calibrator.predict_proba(scores_eval)[:, 1]
 
 
+def _is_haar_solver_failure(exc: Exception) -> bool:
+    return isinstance(exc, RuntimeError) and str(exc).startswith("Constrained solver failed:")
+
+
+def _iter_haar_retry_params(j_max: int, lam: float) -> list[tuple[int, float]]:
+    base_lam = max(float(lam), 1e-12)
+    seen: set[tuple[int, float]] = set()
+    candidates: list[tuple[int, float]] = []
+
+    def add_candidate(candidate_j_max: int, candidate_lam: float) -> None:
+        key = (int(candidate_j_max), float(candidate_lam))
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(key)
+
+    add_candidate(j_max, base_lam)
+    for factor in (10.0, 100.0, 1000.0):
+        add_candidate(j_max, base_lam * factor)
+
+    for reduced_j_max in range(j_max - 1, 0, -1):
+        add_candidate(reduced_j_max, base_lam)
+        for factor in (10.0, 100.0):
+            add_candidate(reduced_j_max, base_lam * factor)
+
+    return candidates
+
+
+def _fit_haar_calibrator_with_retry(
+    scores_cal: NDArrayFloat,
+    y_cal: NDArrayInt,
+    *,
+    j_max: int,
+    lam: float,
+) -> tuple[HaarMonotoneRidgeCalibrator, dict[str, Any]]:
+    last_error: RuntimeError | None = None
+    attempts = _iter_haar_retry_params(j_max, lam)
+
+    for attempt_idx, (candidate_j_max, candidate_lam) in enumerate(attempts, start=1):
+        calibrator = HaarMonotoneRidgeCalibrator(
+            j_max=candidate_j_max,
+            lam=candidate_lam,
+            use_haar_norm=True,
+            clip_probs=True,
+        )
+        try:
+            calibrator.fit(scores_cal.reshape(-1, 1), y_cal)
+            info = {
+                "requested_j_max": int(j_max),
+                "requested_lam": float(lam),
+                "used_j_max": int(candidate_j_max),
+                "used_lam": float(candidate_lam),
+                "attempts": attempt_idx,
+                "used_fallback": attempt_idx > 1,
+            }
+            if info["used_fallback"]:
+                warnings.warn(
+                    "Haar solver fallback used: "
+                    f"requested j_max={j_max}, lam={lam:g}; "
+                    f"using j_max={candidate_j_max}, lam={candidate_lam:g} "
+                    f"after {attempt_idx} attempts.",
+                    RuntimeWarning,
+                )
+            return calibrator, info
+        except RuntimeError as exc:
+            if not _is_haar_solver_failure(exc):
+                raise
+            last_error = exc
+
+    raise RuntimeError(
+        "Haar solver failed for all retry candidates: "
+        f"requested j_max={j_max}, lam={lam:g}, attempts={len(attempts)}. "
+        f"Last error: {last_error}"
+    )
+
+
+def _fit_haar_with_retry(
+    scores_cal: NDArrayFloat,
+    y_cal: NDArrayInt,
+    scores_eval: NDArrayFloat,
+    *,
+    j_max: int,
+    lam: float,
+) -> tuple[NDArrayFloat, dict[str, Any]]:
+    calibrator, info = _fit_haar_calibrator_with_retry(
+        scores_cal,
+        y_cal,
+        j_max=j_max,
+        lam=lam,
+    )
+    probs = calibrator.predict_proba(scores_eval.reshape(-1, 1))[:, 1]
+    return probs, info
+
+
 def _subset_indices(y: NDArrayInt, frac: float, random_state: int) -> NDArrayInt:
     if frac >= 1.0:
         return np.arange(y.shape[0], dtype=int)
@@ -716,14 +810,13 @@ def _run_cross_validated_train_test_stage(
             suppress_convergence_warnings=suppress_convergence_warnings,
         )
 
-        haar_calibrator = HaarMonotoneRidgeCalibrator(
+        p_haar, haar_fit_info = _fit_haar_with_retry(
+            p_cal,
+            y_cal,
+            p_test,
             j_max=haar_j_max,
             lam=haar_lam,
-            use_haar_norm=True,
-            clip_probs=True,
         )
-        haar_calibrator.fit(p_cal.reshape(-1, 1), y_cal)
-        p_haar = haar_calibrator.predict_proba(p_test.reshape(-1, 1))[:, 1]
 
         fold_rows = [
             _metrics_row(
@@ -768,8 +861,8 @@ def _run_cross_validated_train_test_stage(
                 y_true=y_test,
                 y_prob=p_haar,
                 ece_bins=ece_bins,
-                j_max=haar_j_max,
-                lam=haar_lam,
+                j_max=haar_fit_info["used_j_max"],
+                lam=haar_fit_info["used_lam"],
             ),
         ]
         for row in fold_rows:
@@ -777,6 +870,11 @@ def _run_cross_validated_train_test_stage(
             row["train_samples"] = int(y_train.shape[0])
             row["calibration_samples"] = int(y_cal.shape[0])
             row["test_samples"] = int(y_test.shape[0])
+            if row["method"] == "haar_gridsearch_best":
+                row["haar_requested_j_max"] = haar_fit_info["requested_j_max"]
+                row["haar_requested_lam"] = haar_fit_info["requested_lam"]
+                row["haar_attempts"] = haar_fit_info["attempts"]
+                row["haar_used_fallback"] = haar_fit_info["used_fallback"]
         rows.extend(fold_rows)
 
     return _reorder_metric_columns(pd.DataFrame(rows))
@@ -823,7 +921,7 @@ def _run_gridsearch(
         scoring="neg_brier_score",
         cv=cv,
         n_jobs=-1,
-        refit=True,
+        refit=False,
         return_train_score=True,
     )
     if suppress_fitfailed_warnings:
@@ -842,6 +940,15 @@ def _run_gridsearch(
             grid.fit(scores_cal.reshape(-1, 1), y_cal)
     else:
         grid.fit(scores_cal.reshape(-1, 1), y_cal)
+
+    best_estimator, best_fit_info = _fit_haar_calibrator_with_retry(
+        scores_cal,
+        y_cal,
+        j_max=int(grid.best_params_["j_max"]),
+        lam=float(grid.best_params_["lam"]),
+    )
+    grid.best_estimator_ = best_estimator
+    grid.best_estimator_fit_info_ = best_fit_info
     return grid
 
 
@@ -1472,6 +1579,18 @@ def main() -> None:
     )
 
     best_calibrator = grid.best_estimator_
+    best_calibrator_fit_info = getattr(
+        grid,
+        "best_estimator_fit_info_",
+        {
+            "requested_j_max": int(grid.best_params_["j_max"]),
+            "requested_lam": float(grid.best_params_["lam"]),
+            "used_j_max": int(best_calibrator.j_max),
+            "used_lam": float(best_calibrator.lam),
+            "attempts": 1,
+            "used_fallback": False,
+        },
+    )
     p_grid_best = best_calibrator.predict_proba(p_test.reshape(-1, 1))[:, 1]
     cv_train_test_df = _run_cross_validated_train_test_stage(
         x=x,
@@ -1541,10 +1660,16 @@ def main() -> None:
             y_true=split.y_test,
             y_prob=p_grid_best,
             ece_bins=args.ece_bins,
-            j_max=int(grid.best_params_["j_max"]),
-            lam=float(grid.best_params_["lam"]),
+            j_max=best_calibrator_fit_info["used_j_max"],
+            lam=best_calibrator_fit_info["used_lam"],
         ),
     ]
+    for row in final_rows:
+        if row["method"] == "haar_gridsearch_best":
+            row["haar_requested_j_max"] = best_calibrator_fit_info["requested_j_max"]
+            row["haar_requested_lam"] = best_calibrator_fit_info["requested_lam"]
+            row["haar_attempts"] = best_calibrator_fit_info["attempts"]
+            row["haar_used_fallback"] = best_calibrator_fit_info["used_fallback"]
     final_df = _reorder_metric_columns(pd.DataFrame(final_rows))
     final_df.to_csv(run_dir / "final_test_metrics.csv", index=False)
 
@@ -1606,8 +1731,8 @@ def main() -> None:
         n_bins=args.plot_bins,
         ece_bins=args.ece_bins,
         title=(
-            f"Haar best reliability (j_max={grid.best_params_['j_max']}, "
-            f"lam={grid.best_params_['lam']:g})"
+            f"Haar best reliability (j_max={best_calibrator.j_max}, "
+            f"lam={best_calibrator.lam:g})"
         ),
     )
     probs_for_comparison = {
@@ -1716,6 +1841,7 @@ def main() -> None:
             "lam": float(grid.best_params_["lam"]),
             "best_cv_neg_brier": float(grid.best_score_),
         },
+        "gridsearch_best_refit": best_calibrator_fit_info,
         "environment": {
             "python": sys.version,
             "platform": platform.platform(),

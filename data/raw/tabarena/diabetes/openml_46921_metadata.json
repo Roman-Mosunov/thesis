@@ -1,0 +1,13 @@
+{
+  "dataset_name": "diabetes",
+  "dataset_id": 46921,
+  "target_column": "TestedPositiveForDiabetes",
+  "n_rows": 768,
+  "n_features": 8,
+  "n_classes": 2,
+  "class_counts_raw": {
+    "No": 500,
+    "Yes": 268
+  },
+  "persisted_at_utc": "2026-03-18T13:43:34.311795+00:00"
+}
