@@ -139,6 +139,7 @@ def _fetch_openml_dataset(*, dataset_id: int, refresh: bool):
             f"OpenML cache checksum mismatch for dataset_id={dataset_id}; "
             "retrying without cache.",
             RuntimeWarning,
+            stacklevel=2,
         )
         return fetch_openml(**{**fetch_kwargs, "cache": False})
 
@@ -540,6 +541,7 @@ def _fit_haar_calibrator_with_retry(
                     f"using j_max={candidate_j_max}, lam={candidate_lam:g} "
                     f"after {attempt_idx} attempts.",
                     RuntimeWarning,
+                    stacklevel=2,
                 )
             return calibrator, info
         except RuntimeError as exc:

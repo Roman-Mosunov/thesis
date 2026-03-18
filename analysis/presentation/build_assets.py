@@ -8,7 +8,6 @@ from typing import Any
 import matplotlib.pyplot as plt
 import pandas as pd
 
-
 METHOD_ORDER = [
     "uncalibrated_logistic",
     "platt",
@@ -105,7 +104,11 @@ def collect_outputs(
         final_metrics_path = latest / "final_test_metrics.csv"
         mapping_path = latest / "graph_summary_estimator_mapping.csv"
         run_metadata_path = latest / "run_metadata.json"
-        if not (final_metrics_path.exists() and mapping_path.exists() and run_metadata_path.exists()):
+        if not (
+            final_metrics_path.exists()
+            and mapping_path.exists()
+            and run_metadata_path.exists()
+        ):
             continue
 
         final_metrics = pd.read_csv(final_metrics_path)
@@ -353,7 +356,8 @@ def write_focus_snippet(
     if dataset_slug == "credit_card_clients_default":
         mapping_slice = (
             all_mappings.loc[
-                (all_mappings["dataset"] == dataset_slug) & (all_mappings["method"].isin(focus_methods)),
+                (all_mappings["dataset"] == dataset_slug)
+                & (all_mappings["method"].isin(focus_methods)),
                 ["method", "is_monotone_non_decreasing"],
             ]
             .copy()
@@ -424,7 +428,10 @@ def main() -> None:
 
     metadata = load_metadata(root)
     outputs_root = root / "analysis/outputs/tabarena"
-    all_metrics, all_mappings, dataset_summary, latest_paths = collect_outputs(outputs_root, metadata)
+    all_metrics, all_mappings, dataset_summary, latest_paths = collect_outputs(
+        outputs_root,
+        metadata,
+    )
     method_summary = build_method_summary(all_metrics, dataset_summary)
 
     all_metrics.to_csv(data_dir / "all_metrics_latest.csv", index=False)
@@ -434,7 +441,10 @@ def main() -> None:
 
     copy_focus_figures(latest_paths, figures_dir)
     make_primary_results_figure(method_summary, figures_dir / "aggregate_primary_results.png")
-    make_brier_decomposition_figure(method_summary, figures_dir / "aggregate_brier_decomposition.png")
+    make_brier_decomposition_figure(
+        method_summary,
+        figures_dir / "aggregate_brier_decomposition.png",
+    )
 
     write_scope_snippet(dataset_summary, snippets_dir / "dataset_scope.md")
     write_method_summary_snippet(method_summary, snippets_dir / "method_summary.md")
