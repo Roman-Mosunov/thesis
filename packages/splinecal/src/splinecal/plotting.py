@@ -103,7 +103,8 @@ def plot_reliability_diagram(
     acc = points[:, 1]
     valid = ~np.isnan(conf) & ~np.isnan(acc)
 
-    if ax is None:
+    created_figure = ax is None
+    if created_figure:
         fig, ax_main = plt.subplots(figsize=(7, 6))
     else:
         fig = ax.figure
@@ -160,8 +161,16 @@ def plot_reliability_diagram(
             bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.8, "edgecolor": "#bbbbbb"},
         )
 
-    ax_main.legend(loc="lower right")
+    ax_main.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.14),
+        borderaxespad=0.0,
+        frameon=False,
+        ncol=2,
+    )
     ax_main.set_title(title or f"Reliability Diagram ({n_bins} bins)")
+    if created_figure:
+        fig.tight_layout(rect=(0.0, 0.08, 1.0, 1.0))
     return fig, ax_main
 
 

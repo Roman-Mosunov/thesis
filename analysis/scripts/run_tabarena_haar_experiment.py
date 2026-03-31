@@ -1025,9 +1025,16 @@ def _save_reliability_comparison_plot(
     ax.set_ylabel("Empirical positive rate")
     ax.set_title("Reliability Comparison: All Estimators")
     ax.grid(alpha=0.3)
-    ax.legend(loc="lower right", fontsize=9)
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=180)
+    ax.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.18),
+        borderaxespad=0.0,
+        fontsize=9,
+        frameon=False,
+        ncol=2,
+    )
+    fig.tight_layout(rect=(0.0, 0.16, 1.0, 1.0))
+    fig.savefig(output_path, dpi=180, bbox_inches="tight")
     plt.close(fig)
     return output_path
 
@@ -1152,9 +1159,15 @@ def _save_estimator_comparison_plot(
     ax.set_ylabel("Calibrated probability")
     ax.set_title("Estimator Mapping Comparison")
     ax.grid(alpha=0.3)
-    ax.legend(loc="lower right")
-    fig.tight_layout()
-    fig.savefig(output_plot_path, dpi=180)
+    ax.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.18),
+        borderaxespad=0.0,
+        frameon=False,
+        ncol=2,
+    )
+    fig.tight_layout(rect=(0.0, 0.16, 1.0, 1.0))
+    fig.savefig(output_plot_path, dpi=180, bbox_inches="tight")
     plt.close(fig)
     return output_plot_path, output_table_path
 
