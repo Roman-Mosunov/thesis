@@ -8,7 +8,6 @@ from numpy.typing import NDArray
 
 from .metrics import brier_score, expected_calibration_error
 
-
 PHAT_THEME_FIGURE_FACE = "#2C323C"
 PHAT_THEME_AXES_FACE = "#313842"
 PHAT_THEME_TEXT = "#F2F4F8"

@@ -2305,7 +2305,11 @@ def main() -> None:
         show_histogram=False,
         show_metrics=False,
     )
-    estimator_plot_path, estimator_inverse_plot_path, estimator_table_path = _save_estimator_comparison_plots(
+    (
+        estimator_plot_path,
+        estimator_inverse_plot_path,
+        estimator_table_path,
+    ) = _save_estimator_comparison_plots(
         output_plot_path=plots_dir / "estimator_all_calibrators_comparison.png",
         output_inverse_plot_path=plots_dir / "estimator_inverse_all_calibrators_comparison.png",
         output_table_path=run_dir / "estimator_curves.csv",
