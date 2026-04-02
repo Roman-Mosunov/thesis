@@ -225,8 +225,20 @@ def copy_focus_figures(latest_paths: dict[str, Path], figures_dir: Path) -> None
             figures_dir / f"{short_name}_reliability.png",
         )
         shutil.copy2(
+            plots_dir / "phat_calibration_featured.png",
+            figures_dir / f"{short_name}_phat.png",
+        )
+        shutil.copy2(
+            plots_dir / "phat_calibration_all_estimators_comparison.png",
+            figures_dir / f"{short_name}_phat_comparison.png",
+        )
+        shutil.copy2(
             plots_dir / "estimator_all_calibrators_comparison.png",
             figures_dir / f"{short_name}_mapping.png",
+        )
+        shutil.copy2(
+            plots_dir / "estimator_inverse_all_calibrators_comparison.png",
+            figures_dir / f"{short_name}_mapping_inverse.png",
         )
 
 

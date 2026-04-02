@@ -1,5 +1,5 @@
-- `30` binary TabArena datasets from business & marketing (12), finance (8), biology & life sciences (3), medical & healthcare (3), technology & internet (2).
-- Sample size range: `748` to `150,000` (median `9,911`).
+- `31` binary TabArena datasets from business & marketing (12), finance (8), biology & life sciences (3), medical & healthcare (3), technology & internet (2).
+- Sample size range: `748` to `150,000` (median `9,822`).
 - Feature range: `4` to `1,776` (median `21`).
-- Positive-class rate: `1.78%` to `50.00%` (median `21.25%`).
+- Positive-class rate: `1.78%` to `50.00%` (median `22.12%`).
 - All summaries use the latest local run per dataset in `analysis/outputs/tabarena/...`.

@@ -1,0 +1,13 @@
+{
+  "dataset_name": "credit-card-clients-default",
+  "dataset_id": 46913,
+  "target_column": "DonatedBloodInMarch2007",
+  "n_rows": 748,
+  "n_features": 4,
+  "n_classes": 2,
+  "class_counts_raw": {
+    "No": 570,
+    "Yes": 178
+  },
+  "persisted_at_utc": "2026-04-01T13:56:04.377002+00:00"
+}

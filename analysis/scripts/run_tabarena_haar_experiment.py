@@ -52,12 +52,17 @@ from splinecal import (
     IsotonicBinaryCalibrator,
     PlattBinaryCalibrator,
     SplineBinaryCalibrator,
+    binned_calibration_curve,
     brier_calibration_refinement_loss,
     brier_score,
     expected_calibration_error,
     log_loss_calibration_refinement_loss,
+    reliability_bin_frequencies,
     reliability_points,
+    save_phat_calibration_diagram,
     save_reliability_diagram,
+    save_smoothed_calibration_diagram,
+    smoothed_calibration_curve,
 )
 from tabarena_dataset_presets import (
     format_dataset_presets_table,
@@ -77,6 +82,13 @@ class SplitData:
 
 NDArrayFloat = np.ndarray
 NDArrayInt = np.ndarray
+
+
+PHAT_THEME_FIGURE_FACE = "#2C323C"
+PHAT_THEME_AXES_FACE = "#313842"
+PHAT_THEME_TEXT = "#F2F4F8"
+PHAT_THEME_MUTED = "#C0C7D1"
+PHAT_THEME_GRID = "#D6DDE6"
 
 
 METRIC_COLUMNS_ORDER = [
@@ -1087,9 +1099,260 @@ def _save_reliability_panel_plot(
     return output_path
 
 
-def _save_estimator_comparison_plot(
+def _save_smoothed_calibration_comparison_plot(
+    *,
+    y_true: NDArrayInt,
+    output_path: Path,
+    probs_by_method: dict[str, NDArrayFloat],
+    hist_bins: int,
+    ece_bins: int,
+    grid_points: int,
+    bandwidth: float | None,
+    min_effective_n: float,
+) -> Path:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    fig, (ax_curve, ax_hist) = plt.subplots(
+        2,
+        1,
+        figsize=(9, 7),
+        sharex=True,
+        gridspec_kw={"height_ratios": [3.0, 1.0]},
+    )
+    ax_curve.plot(
+        [0.0, 1.0],
+        [0.0, 1.0],
+        linestyle="--",
+        color="#666666",
+        linewidth=1.2,
+        label="Perfect",
+    )
+
+    style_map = [
+        ("uncalibrated_logistic", "Uncalibrated logistic", "#4C72B0"),
+        ("spline_fixed", "Spline", "#55A868"),
+        ("platt", "Platt", "#C44E52"),
+        ("isotonic", "Isotonic", "#CCB974"),
+        ("beta", "Beta", "#64B5CD"),
+        ("haar_gridsearch_best", "Haar best", "#8172B2"),
+    ]
+    max_freq = 0.0
+    for method, label, color in style_map:
+        if method not in probs_by_method:
+            continue
+        probs = np.asarray(probs_by_method[method], dtype=float)
+        grid, p_hat, _ = smoothed_calibration_curve(
+            y_true,
+            probs,
+            grid_points=grid_points,
+            bandwidth=bandwidth,
+            min_effective_n=min_effective_n,
+        )
+        valid = ~np.isnan(p_hat)
+        ece = expected_calibration_error(y_true, probs, n_bins=ece_bins)
+        brier = brier_score(y_true, probs)
+        ax_curve.plot(
+            grid[valid],
+            p_hat[valid],
+            color=color,
+            linewidth=2.0,
+            label=f"{label} (Brier={brier:.3f}, ECE={ece:.3f})",
+        )
+
+        mids_hist, freqs = reliability_bin_frequencies(probs, n_bins=hist_bins)
+        max_freq = max(max_freq, float(freqs.max()))
+        ax_hist.step(
+            mids_hist,
+            freqs,
+            where="mid",
+            color=color,
+            linewidth=1.6,
+        )
+
+    ax_curve.set_xlim(0.0, 1.0)
+    ax_curve.set_ylim(0.0, 1.0)
+    ax_curve.set_ylabel("Smoothed empirical positive rate")
+    ax_curve.set_title("Smoothed Calibration Comparison: All Estimators")
+    ax_curve.grid(alpha=0.3)
+
+    ax_hist.set_xlim(0.0, 1.0)
+    ax_hist.set_ylim(0.0, max(0.05, max_freq * 1.25))
+    ax_hist.set_ylabel("Share")
+    ax_hist.set_xlabel("Predicted probability p_hat")
+    ax_hist.grid(alpha=0.2, axis="y")
+
+    fig.legend(
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.0),
+        borderaxespad=0.0,
+        fontsize=9,
+        frameon=False,
+        ncol=2,
+    )
+    fig.tight_layout(rect=(0.0, 0.08, 1.0, 1.0))
+    fig.savefig(output_path, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
+def _save_phat_calibration_comparison_plot(
+    *,
+    y_true: NDArrayInt,
+    output_path: Path,
+    probs_by_method: dict[str, NDArrayFloat],
+    curve_bins: int,
+    hist_bins: int,
+    ece_bins: int,
+    min_bin_count: int,
+) -> Path:
+    from matplotlib.ticker import PercentFormatter
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    fig, (ax_curve, ax_hist) = plt.subplots(
+        2,
+        1,
+        figsize=(9, 7),
+        sharex=True,
+        gridspec_kw={"height_ratios": [3.0, 1.0]},
+    )
+    fig.patch.set_facecolor(PHAT_THEME_FIGURE_FACE)
+    for axis, grid_axis in ((ax_curve, "both"), (ax_hist, "y")):
+        axis.set_facecolor(PHAT_THEME_AXES_FACE)
+        for spine in axis.spines.values():
+            spine.set_color(PHAT_THEME_MUTED)
+        axis.tick_params(colors=PHAT_THEME_TEXT)
+        axis.xaxis.label.set_color(PHAT_THEME_TEXT)
+        axis.yaxis.label.set_color(PHAT_THEME_TEXT)
+        axis.title.set_color(PHAT_THEME_TEXT)
+        axis.grid(color=PHAT_THEME_GRID, alpha=0.28, linewidth=0.8, axis=grid_axis)
+    ax_curve.plot(
+        [0.0, 1.0],
+        [0.0, 1.0],
+        color="#AAB3BE",
+        linewidth=1.4,
+        label="Perfect calibration",
+    )
+
+    style_map = [
+        ("uncalibrated_logistic", "Uncalibrated logistic", "#4C72B0"),
+        ("spline_fixed", "Spline", "#55A868"),
+        ("platt", "Platt", "#C44E52"),
+        ("isotonic", "Isotonic", "#CCB974"),
+        ("beta", "Beta", "#64B5CD"),
+        ("haar_gridsearch_best", "Haar best", "#8172B2"),
+    ]
+    max_freq = 0.0
+    for method, label, color in style_map:
+        if method not in probs_by_method:
+            continue
+        probs = np.asarray(probs_by_method[method], dtype=float)
+        mids, observed, counts, _ = binned_calibration_curve(
+            y_true,
+            probs,
+            n_bins=curve_bins,
+            min_bin_count=min_bin_count,
+        )
+        valid = (~np.isnan(observed)) & (counts >= min_bin_count)
+        ece = expected_calibration_error(y_true, probs, n_bins=ece_bins)
+        brier = brier_score(y_true, probs)
+        ax_curve.plot(
+            mids[valid],
+            observed[valid],
+            color=color,
+            linewidth=1.5,
+            marker="D",
+            markersize=5.4,
+            markerfacecolor=color,
+            markeredgewidth=0.0,
+            label=f"{label} (Brier={brier:.3f}, ECE={ece:.3f})",
+        )
+
+        mids_hist, freqs = reliability_bin_frequencies(probs, n_bins=hist_bins)
+        max_freq = max(max_freq, float(freqs.max()))
+        ax_hist.step(
+            mids_hist,
+            freqs,
+            where="mid",
+            color=color,
+            linewidth=1.8,
+            alpha=0.95,
+        )
+
+    ax_curve.set_xlim(0.0, 1.0)
+    ax_curve.set_ylim(0.0, 1.0)
+    ax_curve.set_ylabel("Fraction resolved yes")
+    ax_curve.set_title(
+        "Calibration Curve",
+        loc="left",
+        pad=10,
+        fontweight="bold",
+        color=PHAT_THEME_TEXT,
+    )
+    ax_curve.xaxis.set_major_formatter(PercentFormatter(xmax=1.0, decimals=0))
+    ax_curve.yaxis.set_major_formatter(PercentFormatter(xmax=1.0, decimals=0))
+
+    ax_hist.set_xlim(0.0, 1.0)
+    ax_hist.set_ylim(0.0, max(0.05, max_freq * 1.25))
+    ax_hist.set_ylabel("Share")
+    ax_hist.set_xlabel("Predictions (p_hat)")
+    ax_hist.xaxis.set_major_formatter(PercentFormatter(xmax=1.0, decimals=0))
+    ax_hist.yaxis.set_major_formatter(PercentFormatter(xmax=1.0, decimals=0))
+
+    legend = fig.legend(
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.0),
+        borderaxespad=0.0,
+        fontsize=9,
+        frameon=False,
+        ncol=2,
+    )
+    for text in legend.get_texts():
+        text.set_color(PHAT_THEME_TEXT)
+    fig.tight_layout(rect=(0.0, 0.08, 1.0, 1.0))
+    fig.savefig(output_path, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
+def _select_featured_calibration_method(
+    *,
+    y_true: NDArrayInt,
+    probs_by_method: dict[str, NDArrayFloat],
+    ece_bins: int,
+) -> tuple[str, str, NDArrayFloat]:
+    style_map = [
+        ("uncalibrated_logistic", "Uncalibrated logistic"),
+        ("spline_fixed", "Spline"),
+        ("platt", "Platt"),
+        ("isotonic", "Isotonic"),
+        ("beta", "Beta"),
+        ("haar_gridsearch_best", "Haar best"),
+    ]
+    ranked_methods: list[tuple[float, float, str, str, NDArrayFloat]] = []
+    for method, label in style_map:
+        if method not in probs_by_method:
+            continue
+        probs = np.asarray(probs_by_method[method], dtype=float)
+        ranked_methods.append(
+            (
+                expected_calibration_error(y_true, probs, n_bins=ece_bins),
+                brier_score(y_true, probs),
+                method,
+                label,
+                probs,
+            )
+        )
+    if not ranked_methods:
+        raise ValueError("Need at least one method to select a featured calibration curve.")
+    _, _, method, label, probs = min(ranked_methods, key=lambda item: (item[0], item[1], item[2]))
+    return method, label, probs
+
+
+def _save_estimator_comparison_plots(
     *,
     output_plot_path: Path,
+    output_inverse_plot_path: Path,
     output_table_path: Path,
     spline_calibrator: SplineBinaryCalibrator,
     platt_calibrator: PlattBinaryCalibrator,
@@ -1097,11 +1360,12 @@ def _save_estimator_comparison_plot(
     beta_calibrator: BetaBinaryCalibrator,
     haar_best_calibrator: HaarMonotoneRidgeCalibrator,
     grid_points: int,
-) -> tuple[Path, Path]:
+) -> tuple[Path, Path, Path]:
     if grid_points < 50:
         raise ValueError("grid_points must be at least 50.")
 
     output_plot_path.parent.mkdir(parents=True, exist_ok=True)
+    output_inverse_plot_path.parent.mkdir(parents=True, exist_ok=True)
     output_table_path.parent.mkdir(parents=True, exist_ok=True)
 
     x_grid = np.linspace(0.0, 1.0, grid_points)
@@ -1169,7 +1433,60 @@ def _save_estimator_comparison_plot(
     fig.tight_layout(rect=(0.0, 0.16, 1.0, 1.0))
     fig.savefig(output_plot_path, dpi=180, bbox_inches="tight")
     plt.close(fig)
-    return output_plot_path, output_table_path
+
+    from matplotlib.ticker import PercentFormatter
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.plot(
+        [0.0, 1.0],
+        [0.0, 1.0],
+        linestyle="--",
+        color="#666666",
+        linewidth=1.2,
+        label="Identity",
+    )
+    markevery = max(1, grid_points // 20)
+    inverse_styles = [
+        ("spline_fixed", spline_label, "#55A868"),
+        ("platt", platt_label, "#C44E52"),
+        ("isotonic", isotonic_label, "#CCB974"),
+        ("beta", beta_label, "#64B5CD"),
+        ("haar_gridsearch_best", haar_best_label, "#8172B2"),
+    ]
+    for method, label, color in inverse_styles:
+        calibrated = curves[method]
+        order = np.argsort(calibrated, kind="stable")
+        ax.plot(
+            calibrated[order],
+            x_grid[order],
+            color=color,
+            linewidth=1.8,
+            marker="D",
+            markersize=4.0,
+            markerfacecolor=color,
+            markeredgewidth=0.0,
+            markevery=markevery,
+            label=label,
+        )
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(0.0, 1.0)
+    ax.set_xlabel("Predictions (p_hat)")
+    ax.set_ylabel("Raw score")
+    ax.set_title("Calibration Curve: Raw Score by Prediction")
+    ax.grid(alpha=0.35)
+    ax.xaxis.set_major_formatter(PercentFormatter(xmax=1.0, decimals=0))
+    ax.yaxis.set_major_formatter(PercentFormatter(xmax=1.0, decimals=0))
+    ax.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.18),
+        borderaxespad=0.0,
+        frameon=False,
+        ncol=2,
+    )
+    fig.tight_layout(rect=(0.0, 0.16, 1.0, 1.0))
+    fig.savefig(output_inverse_plot_path, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+    return output_plot_path, output_inverse_plot_path, output_table_path
 
 
 def _reliability_summary_row(
@@ -1303,7 +1620,23 @@ def _save_graph_summaries(
         f"- `{plots_dir / 'reliability_haar_gridsearch_best.png'}`",
         f"- `{plots_dir / 'reliability_all_estimators_comparison.png'}`",
         f"- `{plots_dir / 'reliability_all_estimators_panel.png'}`",
+        f"- `{plots_dir / 'smoothed_calibration_uncalibrated_logistic.png'}`",
+        f"- `{plots_dir / 'smoothed_calibration_spline_fixed.png'}`",
+        f"- `{plots_dir / 'smoothed_calibration_platt.png'}`",
+        f"- `{plots_dir / 'smoothed_calibration_isotonic.png'}`",
+        f"- `{plots_dir / 'smoothed_calibration_beta.png'}`",
+        f"- `{plots_dir / 'smoothed_calibration_haar_gridsearch_best.png'}`",
+        f"- `{plots_dir / 'smoothed_calibration_all_estimators_comparison.png'}`",
+        f"- `{plots_dir / 'phat_calibration_uncalibrated_logistic.png'}`",
+        f"- `{plots_dir / 'phat_calibration_spline_fixed.png'}`",
+        f"- `{plots_dir / 'phat_calibration_platt.png'}`",
+        f"- `{plots_dir / 'phat_calibration_isotonic.png'}`",
+        f"- `{plots_dir / 'phat_calibration_beta.png'}`",
+        f"- `{plots_dir / 'phat_calibration_haar_gridsearch_best.png'}`",
+        f"- `{plots_dir / 'phat_calibration_all_estimators_comparison.png'}`",
+        f"- `{plots_dir / 'phat_calibration_featured.png'}`",
         f"- `{plots_dir / 'estimator_all_calibrators_comparison.png'}`",
+        f"- `{plots_dir / 'estimator_inverse_all_calibrators_comparison.png'}`",
     ]
     summary_md_path = run_dir / "graph_summaries.md"
     summary_md_path.write_text("\n".join(md_lines) + "\n", encoding="utf-8")
@@ -1382,6 +1715,10 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--ece-bins", type=int, default=20)
     parser.add_argument("--plot-bins", type=int, default=20)
+    parser.add_argument("--phat-min-bin-count", type=int, default=1)
+    parser.add_argument("--smooth-grid-points", type=int, default=200)
+    parser.add_argument("--smooth-bandwidth", type=float, default=None)
+    parser.add_argument("--smooth-min-effective-n", type=float, default=5.0)
     parser.add_argument("--estimator-grid-points", type=int, default=1001)
     parser.add_argument("--random-state", type=int, default=42)
 
@@ -1422,6 +1759,14 @@ def main() -> None:
         raise ValueError("--logreg-max-iter must be >= 100.")
     if args.onehot_min_frequency is not None and args.onehot_min_frequency < 2:
         raise ValueError("--onehot-min-frequency must be >= 2 when provided.")
+    if args.smooth_grid_points < 10:
+        raise ValueError("--smooth-grid-points must be >= 10.")
+    if args.phat_min_bin_count < 1:
+        raise ValueError("--phat-min-bin-count must be >= 1.")
+    if args.smooth_bandwidth is not None and args.smooth_bandwidth <= 0.0:
+        raise ValueError("--smooth-bandwidth must be > 0 when provided.")
+    if args.smooth_min_effective_n <= 0.0:
+        raise ValueError("--smooth-min-effective-n must be > 0.")
 
     repo_root = Path(__file__).resolve().parents[2]
     run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -1772,8 +2117,197 @@ def main() -> None:
         n_bins=args.plot_bins,
         ece_bins=args.ece_bins,
     )
-    estimator_plot_path, estimator_table_path = _save_estimator_comparison_plot(
+    save_smoothed_calibration_diagram(
+        split.y_test,
+        p_test,
+        output_path=plots_dir / "smoothed_calibration_uncalibrated_logistic.png",
+        grid_points=args.smooth_grid_points,
+        hist_bins=args.plot_bins,
+        ece_bins=args.ece_bins,
+        bandwidth=args.smooth_bandwidth,
+        min_effective_n=args.smooth_min_effective_n,
+        title="Uncalibrated logistic smooth p_hat curve",
+        curve_color="#4C72B0",
+    )
+    save_smoothed_calibration_diagram(
+        split.y_test,
+        p_spline_full,
+        output_path=plots_dir / "smoothed_calibration_spline_fixed.png",
+        grid_points=args.smooth_grid_points,
+        hist_bins=args.plot_bins,
+        ece_bins=args.ece_bins,
+        bandwidth=args.smooth_bandwidth,
+        min_effective_n=args.smooth_min_effective_n,
+        title=f"Spline smooth p_hat curve (n_knots={args.spline_n_knots})",
+        curve_color="#55A868",
+    )
+    save_smoothed_calibration_diagram(
+        split.y_test,
+        p_platt_full,
+        output_path=plots_dir / "smoothed_calibration_platt.png",
+        grid_points=args.smooth_grid_points,
+        hist_bins=args.plot_bins,
+        ece_bins=args.ece_bins,
+        bandwidth=args.smooth_bandwidth,
+        min_effective_n=args.smooth_min_effective_n,
+        title=f"Platt smooth p_hat curve (C={args.platt_c:g})",
+        curve_color="#C44E52",
+    )
+    save_smoothed_calibration_diagram(
+        split.y_test,
+        p_isotonic_full,
+        output_path=plots_dir / "smoothed_calibration_isotonic.png",
+        grid_points=args.smooth_grid_points,
+        hist_bins=args.plot_bins,
+        ece_bins=args.ece_bins,
+        bandwidth=args.smooth_bandwidth,
+        min_effective_n=args.smooth_min_effective_n,
+        title="Isotonic smooth p_hat curve",
+        curve_color="#CCB974",
+    )
+    save_smoothed_calibration_diagram(
+        split.y_test,
+        p_beta_full,
+        output_path=plots_dir / "smoothed_calibration_beta.png",
+        grid_points=args.smooth_grid_points,
+        hist_bins=args.plot_bins,
+        ece_bins=args.ece_bins,
+        bandwidth=args.smooth_bandwidth,
+        min_effective_n=args.smooth_min_effective_n,
+        title=f"Beta smooth p_hat curve (C={args.beta_c:g})",
+        curve_color="#64B5CD",
+    )
+    save_smoothed_calibration_diagram(
+        split.y_test,
+        p_grid_best,
+        output_path=plots_dir / "smoothed_calibration_haar_gridsearch_best.png",
+        grid_points=args.smooth_grid_points,
+        hist_bins=args.plot_bins,
+        ece_bins=args.ece_bins,
+        bandwidth=args.smooth_bandwidth,
+        min_effective_n=args.smooth_min_effective_n,
+        title=(
+            f"Haar best smooth p_hat curve (j_max={best_calibrator.j_max}, "
+            f"lam={best_calibrator.lam:g})"
+        ),
+        curve_color="#8172B2",
+    )
+    _save_smoothed_calibration_comparison_plot(
+        y_true=split.y_test,
+        output_path=plots_dir / "smoothed_calibration_all_estimators_comparison.png",
+        probs_by_method=probs_for_comparison,
+        hist_bins=args.plot_bins,
+        ece_bins=args.ece_bins,
+        grid_points=args.smooth_grid_points,
+        bandwidth=args.smooth_bandwidth,
+        min_effective_n=args.smooth_min_effective_n,
+    )
+    save_phat_calibration_diagram(
+        split.y_test,
+        p_test,
+        output_path=plots_dir / "phat_calibration_uncalibrated_logistic.png",
+        n_bins=args.plot_bins,
+        hist_bins=args.plot_bins,
+        ece_bins=args.ece_bins,
+        title="Calibration Curve: Uncalibrated logistic",
+        curve_label="Uncalibrated logistic calibration",
+        curve_color="#4C72B0",
+        min_bin_count=args.phat_min_bin_count,
+    )
+    save_phat_calibration_diagram(
+        split.y_test,
+        p_spline_full,
+        output_path=plots_dir / "phat_calibration_spline_fixed.png",
+        n_bins=args.plot_bins,
+        hist_bins=args.plot_bins,
+        ece_bins=args.ece_bins,
+        title=f"Calibration Curve: Spline (n_knots={args.spline_n_knots})",
+        curve_label="Spline calibration",
+        curve_color="#55A868",
+        min_bin_count=args.phat_min_bin_count,
+    )
+    save_phat_calibration_diagram(
+        split.y_test,
+        p_platt_full,
+        output_path=plots_dir / "phat_calibration_platt.png",
+        n_bins=args.plot_bins,
+        hist_bins=args.plot_bins,
+        ece_bins=args.ece_bins,
+        title=f"Calibration Curve: Platt (C={args.platt_c:g})",
+        curve_label="Platt calibration",
+        curve_color="#C44E52",
+        min_bin_count=args.phat_min_bin_count,
+    )
+    save_phat_calibration_diagram(
+        split.y_test,
+        p_isotonic_full,
+        output_path=plots_dir / "phat_calibration_isotonic.png",
+        n_bins=args.plot_bins,
+        hist_bins=args.plot_bins,
+        ece_bins=args.ece_bins,
+        title="Calibration Curve: Isotonic",
+        curve_label="Isotonic calibration",
+        curve_color="#CCB974",
+        min_bin_count=args.phat_min_bin_count,
+    )
+    save_phat_calibration_diagram(
+        split.y_test,
+        p_beta_full,
+        output_path=plots_dir / "phat_calibration_beta.png",
+        n_bins=args.plot_bins,
+        hist_bins=args.plot_bins,
+        ece_bins=args.ece_bins,
+        title=f"Calibration Curve: Beta (C={args.beta_c:g})",
+        curve_label="Beta calibration",
+        curve_color="#64B5CD",
+        min_bin_count=args.phat_min_bin_count,
+    )
+    save_phat_calibration_diagram(
+        split.y_test,
+        p_grid_best,
+        output_path=plots_dir / "phat_calibration_haar_gridsearch_best.png",
+        n_bins=args.plot_bins,
+        hist_bins=args.plot_bins,
+        ece_bins=args.ece_bins,
+        title=(
+            f"Calibration Curve: Haar best (j_max={best_calibrator.j_max}, "
+            f"lam={best_calibrator.lam:g})"
+        ),
+        curve_label="Haar calibration",
+        curve_color="#8172B2",
+        min_bin_count=args.phat_min_bin_count,
+    )
+    _save_phat_calibration_comparison_plot(
+        y_true=split.y_test,
+        output_path=plots_dir / "phat_calibration_all_estimators_comparison.png",
+        probs_by_method=probs_for_comparison,
+        curve_bins=args.plot_bins,
+        hist_bins=args.plot_bins,
+        ece_bins=args.ece_bins,
+        min_bin_count=args.phat_min_bin_count,
+    )
+    _, featured_label, featured_probs = _select_featured_calibration_method(
+        y_true=split.y_test,
+        probs_by_method=probs_for_comparison,
+        ece_bins=args.ece_bins,
+    )
+    save_phat_calibration_diagram(
+        split.y_test,
+        featured_probs,
+        output_path=plots_dir / "phat_calibration_featured.png",
+        n_bins=args.plot_bins,
+        hist_bins=args.plot_bins,
+        ece_bins=args.ece_bins,
+        title="Calibration Curve",
+        curve_label=f"Best calibrator: {featured_label}",
+        curve_color="#FFB000",
+        min_bin_count=args.phat_min_bin_count,
+        show_histogram=False,
+        show_metrics=False,
+    )
+    estimator_plot_path, estimator_inverse_plot_path, estimator_table_path = _save_estimator_comparison_plots(
         output_plot_path=plots_dir / "estimator_all_calibrators_comparison.png",
+        output_inverse_plot_path=plots_dir / "estimator_inverse_all_calibrators_comparison.png",
         output_table_path=run_dir / "estimator_curves.csv",
         spline_calibrator=spline_calibrator,
         platt_calibrator=platt_calibrator,
@@ -1848,6 +2382,10 @@ def main() -> None:
             "cross_validated_train_test_folds": args.cv_folds,
             "ece_bins": args.ece_bins,
             "plot_bins": args.plot_bins,
+            "phat_min_bin_count": args.phat_min_bin_count,
+            "smooth_grid_points": args.smooth_grid_points,
+            "smooth_bandwidth": args.smooth_bandwidth,
+            "smooth_min_effective_n": args.smooth_min_effective_n,
             "estimator_grid_points": args.estimator_grid_points,
         },
         "two_stage_lambda_search": recommendation,
@@ -1895,7 +2433,23 @@ def main() -> None:
     print(f"- {plots_dir / 'reliability_haar_gridsearch_best.png'}")
     print(f"- {plots_dir / 'reliability_all_estimators_comparison.png'}")
     print(f"- {plots_dir / 'reliability_all_estimators_panel.png'}")
+    print(f"- {plots_dir / 'smoothed_calibration_uncalibrated_logistic.png'}")
+    print(f"- {plots_dir / 'smoothed_calibration_spline_fixed.png'}")
+    print(f"- {plots_dir / 'smoothed_calibration_platt.png'}")
+    print(f"- {plots_dir / 'smoothed_calibration_isotonic.png'}")
+    print(f"- {plots_dir / 'smoothed_calibration_beta.png'}")
+    print(f"- {plots_dir / 'smoothed_calibration_haar_gridsearch_best.png'}")
+    print(f"- {plots_dir / 'smoothed_calibration_all_estimators_comparison.png'}")
+    print(f"- {plots_dir / 'phat_calibration_uncalibrated_logistic.png'}")
+    print(f"- {plots_dir / 'phat_calibration_spline_fixed.png'}")
+    print(f"- {plots_dir / 'phat_calibration_platt.png'}")
+    print(f"- {plots_dir / 'phat_calibration_isotonic.png'}")
+    print(f"- {plots_dir / 'phat_calibration_beta.png'}")
+    print(f"- {plots_dir / 'phat_calibration_haar_gridsearch_best.png'}")
+    print(f"- {plots_dir / 'phat_calibration_all_estimators_comparison.png'}")
+    print(f"- {plots_dir / 'phat_calibration_featured.png'}")
     print(f"- {estimator_plot_path}")
+    print(f"- {estimator_inverse_plot_path}")
     print(f"- {models_dir / 'base_model.joblib'}")
     print(f"- {models_dir / 'spline_fixed_calibrator.joblib'}")
     print(f"- {models_dir / 'platt_calibrator.joblib'}")

@@ -1,7 +1,7 @@
 | Dataset | n | Pos. rate | Best by Brier | Best Brier | Gain vs uncal. |
 | --- | --- | --- | --- | --- | --- |
-| credit card clients default | 30,000 | 22.12% | Haar | 0.1414 | 0.0665 |
-| blood transfusion service center | 748 | 23.80% | Haar | 0.1481 | 0.0451 |
+| blood transfusion service center | 748 | 23.80% | Isotonic | 0.1474 | 0.0461 |
+| credit card clients default | 748 | 23.80% | Haar | 0.1481 | 0.0451 |
 | HR Analytics Job Change of Data Scientists | 19,158 | 24.93% | Spline | 0.1451 | 0.0367 |
 | churn | 1,000 | 30.00% | Haar | 0.1689 | 0.0211 |
 | credit g | 1,000 | 30.00% | Haar | 0.1689 | 0.0211 |

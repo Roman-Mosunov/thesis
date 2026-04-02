@@ -15,3 +15,4 @@
 | online shoppers intention | 12,330 | 15.47% | Platt | 0.0791 | 0.0415 |
 | jm1 | 10,885 | 19.35% | Platt | 0.1403 | 0.0719 |
 | Bank Customer Churn | 10,000 | 20.37% | Spline | 0.1387 | 0.0592 |
+| credit card clients default | 30,000 | 22.12% | Haar | 0.1414 | 0.0665 |
