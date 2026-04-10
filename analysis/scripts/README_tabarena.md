@@ -196,6 +196,8 @@ Saved plots:
 - `plots/reliability_haar_gridsearch_best.png`
 - `plots/reliability_all_estimators_comparison.png`
 - `plots/reliability_all_estimators_panel.png`
+- `plots/smoothed_calibration_uncalibrated_spline_beta_comparison.png`
+- `plots/smoothed_calibration_platt_isotonic_haar_comparison.png`
 - `plots/estimator_all_calibrators_comparison.png`
 
 ## Thesis usage notes

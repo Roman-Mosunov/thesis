@@ -1195,6 +1195,109 @@ def _save_smoothed_calibration_comparison_plot(
     return output_path
 
 
+def _save_smoothed_calibration_grouped_comparison_plot(
+    *,
+    y_true: NDArrayInt,
+    output_path: Path,
+    probs_by_method: dict[str, NDArrayFloat],
+    method_group: list[tuple[str, str, str]],
+    hist_bins: int,
+    ece_bins: int,
+    grid_points: int,
+    bandwidth: float | None,
+    min_effective_n: float,
+    title: str,
+) -> Path:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    available_methods = [
+        (method, label, color)
+        for method, label, color in method_group
+        if method in probs_by_method
+    ]
+    if not available_methods:
+        raise ValueError("Need at least one available method to build a grouped smoothed plot.")
+
+    fig, (ax_curve, ax_hist) = plt.subplots(
+        2,
+        1,
+        figsize=(9, 7),
+        sharex=True,
+        gridspec_kw={"height_ratios": [3.0, 1.0]},
+    )
+    ax_curve.plot(
+        [0.0, 1.0],
+        [0.0, 1.0],
+        linestyle="--",
+        color="#666666",
+        linewidth=1.2,
+        label="Perfect",
+    )
+    max_freq = 0.0
+    for method, label, color in available_methods:
+        probs = np.asarray(probs_by_method[method], dtype=float)
+        grid, p_hat, _ = smoothed_calibration_curve(
+            y_true,
+            probs,
+            grid_points=grid_points,
+            bandwidth=bandwidth,
+            min_effective_n=min_effective_n,
+        )
+        valid = ~np.isnan(p_hat)
+        mids_hist, freqs = reliability_bin_frequencies(probs, n_bins=hist_bins)
+        max_freq = max(max_freq, float(freqs.max()))
+        ax_curve.plot(
+            grid[valid],
+            p_hat[valid],
+            color=color,
+            linewidth=2.0,
+            label=(
+                f"{label} "
+                f"(Brier={brier_score(y_true, probs):.3f}, "
+                f"ECE={expected_calibration_error(y_true, probs, n_bins=ece_bins):.3f})"
+            ),
+        )
+        ax_hist.fill_between(
+            mids_hist,
+            freqs,
+            step="mid",
+            color=color,
+            alpha=0.16,
+        )
+        ax_hist.step(
+            mids_hist,
+            freqs,
+            where="mid",
+            color=color,
+            linewidth=1.6,
+        )
+
+    ax_curve.set_xlim(0.0, 1.0)
+    ax_curve.set_ylim(0.0, 1.0)
+    ax_curve.set_ylabel("Smoothed empirical positive rate")
+    ax_curve.set_title(title)
+    ax_curve.grid(alpha=0.3)
+
+    ax_hist.set_xlim(0.0, 1.0)
+    ax_hist.set_ylim(0.0, max(0.05, max_freq * 1.25))
+    ax_hist.set_ylabel("Share")
+    ax_hist.set_xlabel("Predicted probability p_hat")
+    ax_hist.grid(alpha=0.2, axis="y")
+
+    fig.legend(
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.0),
+        borderaxespad=0.0,
+        fontsize=9,
+        frameon=False,
+        ncol=2,
+    )
+    fig.tight_layout(rect=(0.0, 0.08, 1.0, 1.0))
+    fig.savefig(output_path, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
 def _save_phat_calibration_comparison_plot(
     *,
     y_true: NDArrayInt,
@@ -1627,6 +1730,8 @@ def _save_graph_summaries(
         f"- `{plots_dir / 'smoothed_calibration_beta.png'}`",
         f"- `{plots_dir / 'smoothed_calibration_haar_gridsearch_best.png'}`",
         f"- `{plots_dir / 'smoothed_calibration_all_estimators_comparison.png'}`",
+        f"- `{plots_dir / 'smoothed_calibration_uncalibrated_spline_beta_comparison.png'}`",
+        f"- `{plots_dir / 'smoothed_calibration_platt_isotonic_haar_comparison.png'}`",
         f"- `{plots_dir / 'phat_calibration_uncalibrated_logistic.png'}`",
         f"- `{plots_dir / 'phat_calibration_spline_fixed.png'}`",
         f"- `{plots_dir / 'phat_calibration_platt.png'}`",
@@ -2202,6 +2307,38 @@ def main() -> None:
         bandwidth=args.smooth_bandwidth,
         min_effective_n=args.smooth_min_effective_n,
     )
+    _save_smoothed_calibration_grouped_comparison_plot(
+        y_true=split.y_test,
+        output_path=plots_dir / "smoothed_calibration_uncalibrated_spline_beta_comparison.png",
+        probs_by_method=probs_for_comparison,
+        method_group=[
+            ("uncalibrated_logistic", "Uncalibrated logistic", "#4C72B0"),
+            ("spline_fixed", "Spline", "#55A868"),
+            ("beta", "Beta", "#64B5CD"),
+        ],
+        hist_bins=args.plot_bins,
+        ece_bins=args.ece_bins,
+        grid_points=args.smooth_grid_points,
+        bandwidth=args.smooth_bandwidth,
+        min_effective_n=args.smooth_min_effective_n,
+        title="Smoothed Calibration Comparison: Uncalibrated, Spline, and Beta",
+    )
+    _save_smoothed_calibration_grouped_comparison_plot(
+        y_true=split.y_test,
+        output_path=plots_dir / "smoothed_calibration_platt_isotonic_haar_comparison.png",
+        probs_by_method=probs_for_comparison,
+        method_group=[
+            ("platt", "Platt", "#C44E52"),
+            ("isotonic", "Isotonic", "#CCB974"),
+            ("haar_gridsearch_best", "Haar best", "#8172B2"),
+        ],
+        hist_bins=args.plot_bins,
+        ece_bins=args.ece_bins,
+        grid_points=args.smooth_grid_points,
+        bandwidth=args.smooth_bandwidth,
+        min_effective_n=args.smooth_min_effective_n,
+        title="Smoothed Calibration Comparison: Platt, Isotonic, and Haar",
+    )
     save_phat_calibration_diagram(
         split.y_test,
         p_test,
@@ -2444,6 +2581,8 @@ def main() -> None:
     print(f"- {plots_dir / 'smoothed_calibration_beta.png'}")
     print(f"- {plots_dir / 'smoothed_calibration_haar_gridsearch_best.png'}")
     print(f"- {plots_dir / 'smoothed_calibration_all_estimators_comparison.png'}")
+    print(f"- {plots_dir / 'smoothed_calibration_uncalibrated_spline_beta_comparison.png'}")
+    print(f"- {plots_dir / 'smoothed_calibration_platt_isotonic_haar_comparison.png'}")
     print(f"- {plots_dir / 'phat_calibration_uncalibrated_logistic.png'}")
     print(f"- {plots_dir / 'phat_calibration_spline_fixed.png'}")
     print(f"- {plots_dir / 'phat_calibration_platt.png'}")
